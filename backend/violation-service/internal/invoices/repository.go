@@ -64,11 +64,13 @@ func (r *pgRepo) FindByIDWithLatest(ctx context.Context, id uuid.UUID) (*Invoice
 	if err != nil {
 		return nil, err
 	}
-	const q = `SELECT id, status, transaction_id, scenario, created_at
+	// NOTE: the `scenario` column was removed in migration 0011 (replaced by
+	// the Midtrans flow). Only the columns that still exist are selected.
+	const q = `SELECT id, status, transaction_id, payment_method, created_at
 		FROM payments WHERE invoice_id = $1
 		ORDER BY created_at DESC LIMIT 1`
 	var p LatestPayment
-	err = r.db.QueryRow(ctx, q, id).Scan(&p.ID, &p.Status, &p.TransactionID, &p.Scenario, &p.CreatedAt)
+	err = r.db.QueryRow(ctx, q, id).Scan(&p.ID, &p.Status, &p.TransactionID, &p.PaymentMethod, &p.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return &InvoiceWithLatest{Invoice: *inv, LatestPayment: nil}, nil
 	}

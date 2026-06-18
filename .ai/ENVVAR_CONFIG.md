@@ -434,11 +434,85 @@ Must not use development values.
 
 ---
 
+# Midtrans Payment Gateway
+
+The Payment Service integrates with **Midtrans Snap** (see ADR-012).
+
+## MIDTRANS_SERVER_KEY
+
+Server key from the Midtrans dashboard. Starts with `SB-Mid-server-` for
+sandbox, `Mid-server-` for production. Required for live integration.
+
+```env
+MIDTRANS_SERVER_KEY=SB-Mid-server-XVkeSQW-v9dG1TJa29FbjxXG
+```
+
+> If the value starts with `MOCK_`, the service returns a fake Snap token
+> without hitting Midtrans. For local development without internet only.
+
+## MIDTRANS_ENV
+
+`sandbox` or `production`. Controls the Midtrans API base URL.
+
+```env
+MIDTRANS_ENV=sandbox
+```
+
+## MIDTRANS_ENABLED_METHODS
+
+Comma-separated list of payment methods to enable. The frontend Snap UI
+will only show these. See Midtrans docs for the full list. Common values:
+`gopay`, `qris`, `shopeepay`, `dana`, `ovo`, `bca_va`, `bni_va`.
+
+```env
+MIDTRANS_ENABLED_METHODS=qris,gopay
+```
+
+## MIDTRANS_NOTIFICATION_URL
+
+The URL Midtrans will POST to when a payment status changes (webhook).
+Leave empty in local dev; set to a publicly-reachable URL (e.g. via ngrok
+or your gateway) in production.
+
+```env
+MIDTRANS_NOTIFICATION_URL=
+```
+
+## MIDTRANS_RETURN_URL
+
+Optional URL the Snap UI can return the user to after payment (e.g. your
+frontend's `/payments/return` page).
+
+```env
+MIDTRANS_RETURN_URL=
+```
+
+## MIDTRANS_HTTP_TIMEOUT_SECONDS
+
+Timeout for each HTTP call to Midtrans.
+
+```env
+MIDTRANS_HTTP_TIMEOUT_SECONDS=10
+```
+
+## MIDTRANS_POLL_INTERVAL_SECONDS / MIDTRANS_MAX_POLL_SECONDS
+
+If the webhook is slow or blocked, the frontend can poll
+`GET /payments/{id}`. The service will not actively poll, but the env
+vars are documented for the upcoming polling worker (not used yet).
+
+```env
+MIDTRANS_POLL_INTERVAL_SECONDS=5
+MIDTRANS_MAX_POLL_SECONDS=60
+```
+
+---
+
 # Variables Not Used
 
 The following infrastructure is intentionally not implemented:
 
-```text id="jlwm25"
+```text
 AWS S3
 MinIO
 Redis
@@ -447,7 +521,7 @@ Kubernetes
 
 Therefore no environment variables are defined for:
 
-```text id="jlwm26"
+```text
 AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY
 S3_BUCKET

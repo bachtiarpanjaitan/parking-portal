@@ -123,18 +123,32 @@ The system uses **password-based authentication with bcrypt** (ADR-006).
 
 ---
 
-## Payment Rules
+## Payment Rules (Midtrans Snap)
+
+The system integrates with **Midtrans Snap** (see ADR-012). Only payment
+methods listed in `MIDTRANS_ENABLED_METHODS` are exposed to the member
+(GoPay + QRIS in this deployment).
 
 - Only invoices in `PENDING` or `FAILED` status can be paid.
 - `PAID` invoices cannot be re-paid.
-- Payment result comes from the mocked `PaymentService.charge()`.
-- Possible outcomes:
-  - `success` → invoice becomes `PAID`, payment row is `PAID`
-  - `failed` → invoice becomes `FAILED`, payment row is `FAILED`,
-    member can retry (status `FAILED` is payable)
-
-> The mock provider does not actually validate the amount. The service layer
-> enforces that `payments.amount == invoices.amount` for audit purposes.
+- The flow is async via the Midtrans Snap UI:
+  1. `POST /payments/snap-token {invoice_id}` returns a `snap_token` and
+     `redirect_url`.
+  2. The frontend opens the Snap UI (`window.snap.pay(snap_token)`).
+  3. The member chooses GoPay or QRIS and pays.
+  4. Midtrans sends a webhook to `POST /payments/notification`.
+  5. The webhook handler verifies the status with Midtrans
+     (`GET /v2/{order_id}/status`), updates the local payment row, and
+     updates the invoice status (via an internal HTTP call to the
+     Violation Service).
+- Status mapping from Midtrans to our enum:
+  - `settlement` / `capture` → invoice + payment become `PAID`
+  - `pending` → payment stays `PENDING`
+  - `cancel` / `expire` / `deny` → invoice stays `PENDING` (member can retry
+    by calling `/payments/snap-token` again with the same invoice)
+- The service layer enforces that `payments.amount == invoices.amount`
+  for audit purposes (the amount is taken from the invoice, never from the
+  client's request).
 
 ---
 

@@ -376,62 +376,105 @@ Get one invoice with the latest payment info.
 
 # Payments
 
-## POST /payments
+> All endpoints are served by the **Payment Service** (port 8082). The
+> provider is **Midtrans Snap** (see ADR-012). The only methods enabled in
+> this deployment are **GoPay** and **QRIS**, configured via
+> `MIDTRANS_ENABLED_METHODS` (see ENVVAR_CONFIG.md).
 
-> MEMBER can only pay **their own** invoices. Server checks `invoice.member_id == req.user.id`.
+## POST /payments/snap-token
+
+> **MEMBER only.** Creates a Midtrans Snap transaction token for the given
+> invoice. The client receives a `snap_token` and a `redirect_url` to open
+> in the Snap UI (via `window.snap.pay(token)` on the frontend).
 
 **Request:**
 ```json
-{
-  "invoice_id": "uuid",
-  "scenario": "success"
-}
+{ "invoice_id": "uuid" }
 ```
 
-`scenario` is `success` or `failed` (test-only, passed to the mock provider).
-
-**Response 200 (success path):**
+**Response 200:**
 ```json
 {
   "success": true,
   "data": {
     "payment_id": "uuid",
-    "transaction_id": "trx_123",
-    "status": "PAID",
-    "invoice": {
-      "id": "uuid",
-      "status": "PAID",
-      "amount": 150000
-    }
+    "order_id": "ORDER-12345",
+    "snap_token": "66e2f3a4-...",
+    "redirect_url": "https://app.sandbox.midtrans.com/snap/v2/...",
+    "expires_at": "2026-06-18T16:30:00Z"
   }
 }
 ```
 
-**Response 200 (failed path) — still HTTP 200, the failure is in the body:**
+**Errors:**
+- `VALIDATION_ERROR` (400) — missing `invoice_id`
+- `INVOICE_NOT_FOUND` (404)
+- `INVOICE_ALREADY_PAID` (409) — invoice is in `PAID` status
+- `FORBIDDEN` (403) — invoice is not owned by the authenticated member
+- `BAD_GATEWAY` (502) — Midtrans Snap API is unreachable / returned an error
+
+## POST /payments/notification
+
+> **Webhook endpoint** Midtrans calls when the payment status changes. No
+> auth (Midtrans is the caller; rely on HTTPS + (optionally) `X-Signature`).
+
+**Request** (form-encoded or JSON, from Midtrans):
+```json
+{
+  "transaction_status": "settlement",
+  "transaction_id": "...",
+  "status_code": "200",
+  "order_id": "ORDER-12345",
+  "gross_amount": "150000.00",
+  "payment_type": "qris",
+  "fraud_status": "accept",
+  "signature_key": "..."
+}
+```
+
+**Response 200:** (always 200 so Midtrans stops retrying; actual outcome
+is in the DB).
+
+**Effect on DB:**
+- Updates the `payments` row: `status`, `payment_method`, `midraw_response`
+- Calls the Violation Service to update `invoices.status`:
+  - `settlement`/`capture` → `PAID`
+  - `cancel`/`expire`/`deny` → leave at `PENDING` (member can retry)
+- Publishes `PaymentSucceeded` or `PaymentFailed` to RabbitMQ
+
+## GET /payments/{id}
+
+> Get a single payment record (Midtrans + local state).
+
+**Response 200:**
 ```json
 {
   "success": true,
   "data": {
-    "payment_id": "uuid",
-    "transaction_id": "trx_456",
-    "status": "FAILED",
-    "invoice": {
-      "id": "uuid",
-      "status": "FAILED",
-      "amount": 150000
-    }
-  },
-  "message": "Payment failed"
+    "id": "uuid",
+    "invoice_id": "uuid",
+    "amount": 150000,
+    "status": "PAID",
+    "payment_method": "qris",
+    "midtrans_order_id": "ORDER-12345",
+    "midtrans_transaction_id": "...",
+    "midtrans_transaction_status": "settlement",
+    "midraw_response": { ... },
+    "created_at": "...",
+    "updated_at": "..."
+  }
 }
 ```
 
-> Note: the assignment does not require a 4xx for provider-declined payments.
-> The provider's failure is reflected in the body's `status: "FAILED"`. The
-> HTTP status is 200 because the request itself was processed.
+**Errors:** `PAYMENT_NOT_FOUND` (404), `FORBIDDEN` (member can only see own).
 
-**Errors:** `INVOICE_NOT_FOUND`, `INVOICE_ALREADY_PAID`, `INVALID_PAYMENT_SCENARIO`,
-`FORBIDDEN`, `PAYMENT_FAILED` (only for unexpected provider error, not the
-mock `failed` scenario).
+## GET /payments
+
+> List payments, paginated. For MEMBER forced to own; OFFICER can filter.
+
+**Query params:** `page`, `page_size`, `member_id` (OFFICER only).
+
+**Response 200:** Paginated envelope `{items: [...], total, page, page_size}`.
 
 ---
 

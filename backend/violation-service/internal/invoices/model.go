@@ -20,11 +20,13 @@ type Invoice struct {
 }
 
 // LatestPayment is the latest payment attempt for a given invoice.
+// (replaces the old `Scenario` field with `PaymentMethod` after the
+// Midtrans migration).
 type LatestPayment struct {
 	ID            uuid.UUID `json:"id"`
 	Status        string    `json:"status"`
 	TransactionID string    `json:"transaction_id"`
-	Scenario      string    `json:"scenario"`
+	PaymentMethod *string   `json:"payment_method,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 

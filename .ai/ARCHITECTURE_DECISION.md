@@ -178,15 +178,59 @@ sequence diagram.
 
 # ADR-012
 
-**Title:** Mocked Payment Provider, In-Process
+**Title:** Midtrans Payment Gateway (Snap) — GoPay + QRIS
 
-**Status:** Accepted
+**Status:** Accepted (revised from "mocked in-process" → "real Midtrans Snap")
 
-**Reason:** The assignment explicitly says "Mock response from payment provider in
-internal service." The `PaymentService.charge(invoice_id, amount, scenario)` function
-is implemented as a Go function inside the Payment Service. It returns
-`{ status, transaction_id }` based on the `scenario` input. There is no external
-HTTP call. This keeps the slice fully runnable without external dependencies.
+**Reason:** The Payment Service integrates with the real **Midtrans Snap**
+payment gateway. Snap is used because it provides a single integration that
+exposes multiple payment methods behind one redirect URL, which keeps the
+frontend simple (one `window.snap.pay(token)` call).
+
+For this assignment, only **GoPay** and **QRIS** are enabled, but the list
+is **configurable** via the `MIDTRANS_ENABLED_METHODS` env var (comma-separated).
+The seed/dev defaults are `qris,gopay` (set in `.env.example`).
+
+**Flow:**
+1. Member calls `POST /api/v1/payments/snap-token {invoice_id}`.
+2. Service validates the invoice (`PENDING` or `FAILED`, owned by the member).
+3. Service calls Midtrans `/snap/v1/transactions` with
+   `enabled_payments: ["gopay","qris"]` and the invoice amount.
+4. Service persists a `payments` row with status `PENDING`,
+   `midtrans_order_id`, `midtrans_snap_token`, `payment_method=null`
+   (Snap doesn't tell us the chosen method up front).
+5. Service returns `{ snap_token, order_id }` to the client.
+6. Frontend calls `window.snap.pay(snap_token)` — Midtrans UI handles the rest.
+7. Midtrans sends a webhook to `POST /api/v1/payments/notification` (if
+   `MIDTRANS_NOTIFICATION_URL` is configured).
+8. The handler verifies by calling Midtrans `GET /v2/{order_id}/status`,
+   then updates the local `payments` row and the `invoices.status`
+   (via an internal HTTP call to the Violation Service).
+9. The Member frontend also polls `GET /payments/{id}` to learn the outcome
+   if the webhook is slow or blocked.
+
+**Midtrans API base URLs:**
+- Sandbox: `https://app.sandbox.midtrans.com` (Snap) +
+  `https://api.sandbox.midtrans.com` (status)
+- Production: `https://app.midtrans.com` + `https://api.midtrans.com`
+
+**Auth:** HTTP Basic — username = `MIDTRANS_SERVER_KEY`, password = empty.
+
+**Failure modes the system handles:**
+- Member cancels Snap UI → Midtrans sends `notification` with
+  `transaction_status = cancel` → mark payment `CANCELLED`, invoice stays
+  `PENDING` (member can retry).
+- Snap expires the transaction (TTL) → `expire` → payment `EXPIRED`.
+- Network error when creating Snap token → return `502 BAD_GATEWAY` to client.
+- Webhook signature verification: by default we trust Midtrans over HTTPS,
+  but in production we recommend adding `X-Signature` header validation
+  against `MIDTRANS_SERVER_KEY` (SHA512 of body+key).
+
+**Mock fallback (for local dev without internet):**
+The `MIDTRANS_SERVER_KEY` check is intentional — if the env var starts with
+`MOCK_` we return a fake `snap_token` so the rest of the flow can be
+exercised without hitting the network. This is for the dev slice only;
+production must use a real key.
 
 ---
 

@@ -89,16 +89,27 @@
 
 # Payment terms
 
-- **Payment** — One attempt to pay an invoice via the mock provider.
-  Each attempt creates a new row.
-- **Payment status** — `PAID` | `FAILED`.
-- **Scenario** — Test-only input: `success` or `failed`. Passed to
-  `PaymentService.charge()` to simulate the provider's response.
-- **Transaction ID** — Identifier returned by the mock provider, e.g.
-  `trx_123`. Stored on the `payments` row.
-- **Mock provider** — In-process function that returns
-  `{ status, transaction_id }` based on the scenario. No external HTTP
-  calls. See ADR-012.
+- **Payment** — One attempt to pay an invoice. Each attempt creates a new row
+  in `payments` (in `PENDING` state) and gets a Midtrans Snap token.
+- **Payment status** — `PENDING` (awaiting Midtrans confirmation),
+  `PAID` (settled), `FAILED` (rejected/expired/cancelled by Midtrans).
+- **Midtrans Snap** — Midtrans's single-integration payment UI. The frontend
+  embeds Snap JS and calls `window.snap.pay(snap_token)` to open it. See
+  ADR-012.
+- **Snap token** — A short-lived token returned by Midtrans `/snap/v1/transactions`,
+  used by the frontend to open the Snap payment page.
+- **Order ID** — Midtrans's unique identifier for a transaction. We generate
+  it server-side (e.g. `ORDER-<uuid>`) and store it in `midtrans_order_id`.
+- **Midtrans transaction status** — `capture` / `settlement` / `pending` /
+  `deny` / `cancel` / `expire` / `refund`. Mapped to our `PAID` / `PENDING` /
+  `FAILED` enum in the service layer.
+- **Webhook (notification)** — Midtrans POSTs to our `MIDTRANS_NOTIFICATION_URL`
+  when a transaction status changes. We verify with Midtrans before updating
+  the DB (the webhook body is a hint, not the source of truth).
+- **payment_method** — GoPay, QRIS, etc. Set after the webhook confirms the
+  actual method the member chose.
+- **MIDTRANS_ENABLED_METHODS** — Env var (comma-separated) listing the payment
+  methods the Snap UI may offer. Set in `.env.example` to `qris,gopay`.
 
 ---
 

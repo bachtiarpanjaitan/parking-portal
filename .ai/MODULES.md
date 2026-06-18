@@ -83,21 +83,27 @@ violation module passes in the inputs and persists the result.
 
 ---
 
-# Payment Module (MEMBER writes)
+# Payment Module (MEMBER writes, OFFICER reads)
 
 **Responsibilities:**
-- `POST /payments` — process payment via the mock provider
-  (`PaymentService.charge(invoice_id, amount, scenario)`)
-- Validate that the invoice is `PENDING` or `FAILED`
-- Validate that the requester is the invoice's member
-- Insert a new `payments` row
-- Update the invoice status (`PAID` or `FAILED`)
-- Publish `PaymentSucceeded` or `PaymentFailed`
+- `POST /payments/snap-token` — call Midtrans Snap API to create a transaction
+  token, persist a `payments` row in `PENDING` state, return the token + URL.
+- `POST /payments/notification` — Midtrans webhook handler. Verifies status by
+  calling Midtrans `GET /v2/{order_id}/status`, then updates the local payment
+  row and calls the Violation Service to update `invoices.status`.
+- `GET /payments/{id}` — read a single payment (member can only see own).
+- `GET /payments` — paginated list (member: own, officer: all).
+- Publish `PaymentSucceeded` or `PaymentFailed` to RabbitMQ.
 
 **Must not:**
 - Modify a `PAID` invoice
 - Modify any violation, rule, or non-payment table
-- Call any external service (mock is in-process)
+- Call Midtrans from the gateway (only the Payment Service does)
+- Trust amounts from the client — the amount is always taken from the invoice
+
+**Allowed payment methods** are read from `MIDTRANS_ENABLED_METHODS` and sent
+in the Snap request's `enabled_payments` array. The frontend Snap UI only
+shows these.
 
 ---
 
