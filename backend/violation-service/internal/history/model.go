@@ -14,6 +14,10 @@ import "time"
 // Entry is the shape returned by GET /history. Every field is a snapshot
 // of the state at the time of the violation (rule version is frozen; the
 // calculation_snapshot never changes).
+//
+// PaymentTxStatus is the Midtrans `transaction_status` of the latest
+// payment attempt: capture / settlement / pending / deny / cancel /
+// expire / refund. Replaces the old pre-Midtrans `scenario` field.
 type Entry struct {
 	ViolationID         string    `json:"violation_id"`
 	MemberID            string    `json:"member_id"`
@@ -29,6 +33,6 @@ type Entry struct {
 	InvoiceStatus       string    `json:"invoice_status"`
 	InvoiceAmount       float64   `json:"invoice_amount"`
 	PaymentStatus       string    `json:"payment_status,omitempty"`
-	PaymentScenario     string    `json:"payment_scenario,omitempty"`
+	PaymentTxStatus     string    `json:"payment_tx_status,omitempty"`
 	CalculationSnapshot any       `json:"calculation_snapshot"`
 }

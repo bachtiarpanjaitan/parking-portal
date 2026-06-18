@@ -31,18 +31,23 @@ type pgRepo struct{ db *pgxpool.Pool }
 func NewPGRepository(db *pgxpool.Pool) Repository { return &pgRepo{db: db} }
 
 // baseSelectFragment is the immutable prefix of the SELECT.
+//
+// NOTE: After migration 0011 the `scenario` column on `payments` was removed
+// in favor of Midtrans columns. We now select `midtrans_transaction_status`
+// (capture/settlement/pending/deny/cancel/expire/refund) as the closest
+// equivalent of the old "scenario" field.
 const baseSelectFragment = `
 		SELECT v.id, v.member_id, v.license_plate, v.violation_type,
 		       v.location, v.violation_timestamp, v.fine_amount, v.photo_url,
 		       v.rule_version_id, frv.version_number,
 		       i.id, COALESCE(i.status, ''), COALESCE(i.amount, 0),
-		       COALESCE(p.status, ''), COALESCE(p.scenario, ''),
+		       COALESCE(p.status, ''), COALESCE(p.midtrans_transaction_status, ''),
 		       v.calculation_snapshot
 		FROM violations v
 		JOIN fine_rule_versions frv ON frv.id = v.rule_version_id
 		LEFT JOIN invoices i ON i.violation_id = v.id
 		LEFT JOIN LATERAL (
-			SELECT status, scenario FROM payments
+			SELECT status, midtrans_transaction_status FROM payments
 			WHERE invoice_id = i.id
 			ORDER BY created_at DESC LIMIT 1
 		) p ON true
@@ -99,7 +104,7 @@ func (r *pgRepo) List(ctx context.Context, f Filter) ([]Entry, int, error) {
 			&e.Location, &e.ViolationTS, &e.FineAmount, &e.PhotoURL,
 			&e.RuleVersionID, &e.RuleVersionNumber,
 			&e.InvoiceID, &e.InvoiceStatus, &e.InvoiceAmount,
-			&e.PaymentStatus, &e.PaymentScenario,
+			&e.PaymentStatus, &e.PaymentTxStatus,
 			&snapRaw,
 		); err != nil {
 			return nil, 0, errs.Wrap(errs.CodeInternal, "scan history row", err)

@@ -1,19 +1,37 @@
 # Parking Violation Portal
 
-A modular Parking Violation Portal built with **Go**, **React + TypeScript**, **PostgreSQL**, and **RabbitMQ**.
+A modular Parking Violation Portal built with **Go (Gin)**, **React + TypeScript (Vite)**, **PostgreSQL**, **RabbitMQ**, and the real **Midtrans Snap** payment gateway.
 
-The system allows officers to issue parking violations, calculate fines using **versioned rule sets** (so historical fines never change), and allows members to pay fines via a **mocked payment provider**. All five flows from the assignment are supported end-to-end.
+The system lets officers issue parking violations, calculate fines using **versioned rule sets** (so historical fines never change), and lets members pay fines via the Midtrans Snap UI (GoPay / QRIS). All five flows from the assignment are supported end-to-end.
 
 > **For reviewers:** see [`DESIGN.md`](./DESIGN.md) for the data flow diagram + ERD, and the [`.ai/`](./.ai/) folder for the full design documentation.
+
+---
+
+# Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start) ⭐
+  - [Option A: Docker Compose (easiest)](#option-a-docker-compose-easiest)
+  - [Option B: Local dev (no Docker)](#option-b-local-dev-no-docker) ⭐
+- [Test Accounts](#test-accounts)
+- [Payment Testing (Midtrans)](#payment-testing-midtrans)
+- [API Quick Reference](#api-quick-reference)
+- [Project Layout](#project-layout)
+- [Assumptions](#assumptions)
+- [Trade-Offs](#trade-offs)
 
 ---
 
 # Features
 
 ## Officer
-- Login (mocked, email-only — see ADR-006)
+- Login (email + bcrypt — see `ADR-006`)
 - Create parking violations with **photo upload** (see `PHOTO_STORAGE.md`)
-- View all violations and filter by member / plate / date
+- View all violations, filter by member / plate / date
 - Manage **fine rule versions** (draft → publish, atomic activate)
 - View transaction history with the **rule version applied** at each violation
 
@@ -21,50 +39,50 @@ The system allows officers to issue parking violations, calculate fines using **
 - Login
 - View **own** violations (server forces `member_id = req.user.id` — see `MODULES.md`)
 - View **own** invoices and pay them
-- Choose payment scenario (`success` / `failed`) to exercise the mock provider
+- Pay with **Midtrans Snap** (GoPay / QRIS — sandbox mode)
 - View **own** payment history
 
 ---
 
 # Architecture
 
-4 services + 2 infra (per `ARCHITECTURE_DECISION.md` ADR-008, ADR-009):
+4 backend services + 1 worker + 2 infra (per `ARCHITECTURE_DECISION.md` ADR-008, ADR-009):
 
 ```
 React Frontend  (http://localhost:3000)
         |
         | HTTP (JWT)
         v
-   API Gateway  (http://localhost:8080)   <- single entrypoint
+   API Gateway  (http://localhost:8080)   <-- single entrypoint (ADR-009)
         |
         +---- HTTP ----+----- HTTP -----+
         |              |               |
         v              v               v
  Violation Svc    Payment Svc    (static /uploads/*)
- (8081)           (8082)
+ (8081)           (8082)            (proxied to violation)
         |              |
         +------+-------+
                |
                v
           PostgreSQL  (shared instance, ownership per SERVICE_BOUNDARIES.md)
                |
-               ^  (publish events, best-effort after commit)
+               ^  (publish events, best-effort after commit — ADR-011)
                |
           RabbitMQ  (parking.events topic exchange)
                |
                v
-   Notification Worker  (consumer-only, logs events)
+   Notification Worker  (consumer-only, logs events — ADR-008)
 ```
 
 | Service              | Port | Owns                                             | Purpose |
 | -------------------- | :--: | ------------------------------------------------ | ------- |
 | API Gateway          | 8080 | nothing (stateless)                              | JWT validation, URL prefix routing, error envelope |
-| Violation Service    | 8081 | `users` (read), `fine_rule_versions`, `fine_rule_details`, `violations`, `invoices`, photo upload | All flows except payment |
-| Payment Service      | 8082 | `payments` (+ atomic update of `invoices.status`) | Mock payment provider, payment recording |
+| Violation Service    | 8081 | `users`, `fine_rule_versions`, `fine_rule_details`, `violations`, `invoices`, photo upload | All flows except payment |
+| Payment Service      | 8082 | `payments` (+ atomic update of `invoices.status`) | **Midtrans Snap** integration |
 | Notification Worker  |  —   | `notifications` (optional), `processed_events`   | Consumes RabbitMQ events, logs them |
 | PostgreSQL           | 5432 | all tables                                       | Shared by all services (per `SERVICE_BOUNDARIES.md`) |
 | RabbitMQ             | 5672 | —                                                | Async event bus |
-| Frontend (nginx)     | 3000 | —                                                | Vite-built static SPA |
+| Frontend (Vite)      | 3000 | —                                                | React SPA (dev) or nginx (prod) |
 
 ---
 
@@ -73,155 +91,232 @@ React Frontend  (http://localhost:3000)
 ## Backend
 - **Go 1.24+**
 - **Gin** (HTTP framework)
-- **pgx** (PostgreSQL driver)
+- **pgx v5** (PostgreSQL driver, connection pool)
 - **amqp091-go** (RabbitMQ client)
-- **golang-jwt** (JWT)
+- **golang-jwt v5** (JWT, HS256)
+- **decimal** (`shopspring/decimal` for money)
+- **validator.v10** (request validation)
+- **zap** (structured logging)
+- **bcrypt** (password hashing)
 
 ## Frontend
 - **React 18+**
-- **TypeScript** (strict)
-- **Vite**
-- **TailwindCSS** + **shadcn/ui**
-- **TanStack Query** (no direct `fetch`/`axios` from components)
+- **TypeScript** (strict mode)
+- **Vite 5** (dev server + build)
+- **TailwindCSS 3** (utility-first CSS)
+- **TanStack Query 5** (data fetching — no raw `fetch` in components)
 - **react-hook-form** + **zod** (form validation)
-- **zustand** (auth/UI state)
+- **zustand 5** (auth/UI state)
+- **axios** (HTTP client + interceptors for JWT + 401 handling)
+- **react-router-dom 6** (routing)
+- **Midtrans Snap.js** (loaded from CDN, `window.snap.pay(token)`)
 
 ## Infrastructure
-- Docker Compose
+- Docker Compose v2
 - PostgreSQL 17
 - RabbitMQ 3 (with management plugin)
+- Midtrans Sandbox (free, real network calls)
 
 ---
 
 # Prerequisites
 
 Install:
-- Docker 24+
-- Docker Compose v2
-- (Optional, for local Go dev) Go 1.24+
-- (Optional, for local frontend dev) Node.js 22+
+- **Docker 24+** & **Docker Compose v2** (for Option A)
+- **Go 1.24+** (for Option B / local dev)
+- **Node.js 22+** (or **Bun** / **pnpm** / **yarn** — any work)
+- **Midtrans Sandbox account** — server key (`SB-Mid-server-...`) already in `.env.example`
+
+For the Midtrans Snap UI in the browser, no extra setup — it loads from `app.sandbox.midtrans.com` CDN.
 
 ---
 
-# Quick Start (full stack with Docker)
+# Quick Start
+
+## Option A: Docker Compose (easiest)
+
+> One command brings up Postgres + RabbitMQ + all 4 backend services + the frontend nginx. Migrations and seed run automatically via the entrypoint scripts.
 
 ```bash
 # 1. Copy env file
 cp .env.example .env
 
-# 2. Build and start all services
+# 2. (optional) edit .env — set MIDTRANS_SERVER_KEY to your real sandbox key
+#    The default key in .env.example is a public demo key (works for dev).
+
+# 3. Build + start everything
 docker compose up -d --build
 
-# 3. Wait for services to be healthy, then run migrations + seed
-docker compose exec violation-service ./migrate
-docker compose exec violation-service ./seed
-
 # 4. Open the app
-# Frontend:  http://localhost:3000
-# Gateway:   http://localhost:8080
-# RabbitMQ:  http://localhost:15672  (guest / guest)
+open http://localhost:3000          # Frontend (Vite dev)
+# or
+open http://localhost:15672          # RabbitMQ UI  (guest / guest)
 ```
 
-That's it. No external services required.
+Migrations and seed run automatically on container start. No extra steps.
 
 ---
 
-# Running Locally (without Docker, for development)
+## Option B: Local dev (no Docker)
 
-## 1. Start infrastructure only
+> Run the Go services directly, point them at a local Postgres + RabbitMQ. Useful when you want fast iteration without rebuilding containers.
+
+### Step 0 — Start the infra (one terminal)
 
 ```bash
+# Option B1: via Docker (infra only, faster)
 docker compose up -d postgres rabbitmq
+
+# Option B2: via brew (no Docker at all)
+brew services start postgresql
+brew services start rabbitmq
+createdb parking_portal
 ```
 
-## 2. Backend
+Verify:
+- Postgres on `localhost:5432` (user `bachtiarpanjaitan` or `postgres`)
+- RabbitMQ on `localhost:5672`
 
-Each Go service has its own module under `backend/<service>/`.
+### Step 1 — `.env` + migrations + seed
 
 ```bash
-# violation-service
-cd backend/violation-service
-cp ../../.env.example .env
-go mod tidy
-go run cmd/migrate/main.go    # run migrations
-go run cmd/seed/main.go       # seed demo data
-go run cmd/api/main.go        # start on :8081
+cd backend
 
-# payment-service
-cd backend/payment-service
-go mod tidy
-go run cmd/api/main.go        # start on :8082
+cp ../.env.example .env
 
-# gateway
-cd backend/gateway
-go mod tidy
-go run cmd/api/main.go        # start on :8080
+# Apply all 11 migrations
+go run ./violation-service/cmd/migrate -dir ./violation-service/migrations
 
-# notification-worker
-cd backend/notification-worker
-go mod tidy
-go run cmd/worker/main.go
+# Seed 3 users + 4 violations + 4 invoices
+go run ./violation-service/cmd/seed
 ```
 
-## 3. Frontend
+### Step 2 — Start the 4 backend services (separate terminals)
 
 ```bash
+# Terminal A — Violation Service (port 8081)
+cd backend
+DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
+  JWT_SECRET=super-secret-key-for-development-min-32 \
+  APP_PORT=8081 STORAGE_PATH=/tmp/ps PUBLIC_UPLOAD_URL=/uploads \
+  go run ./violation-service/cmd/api
+
+# Terminal B — Payment Service (port 8082)
+cd backend
+DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
+  JWT_SECRET=super-secret-key-for-development-min-32 \
+  APP_PORT=8082 \
+  MIDTRANS_SERVER_KEY=SB-Mid-server-XVkeSQW-v9dG1TJa29FbjxXG \
+  MIDTRANS_ENV=sandbox \
+  MIDTRANS_ENABLED_METHODS=qris,gopay \
+  VIOLATION_SERVICE_URL=http://localhost:8081 \
+  go run ./payment-service/cmd/api
+
+# Terminal C — API Gateway (port 8080)  <-- THE FRONTEND TALKS TO THIS
+cd backend
+DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
+  JWT_SECRET=super-secret-key-for-development-min-32 \
+  APP_PORT=8080 \
+  VIOLATION_SERVICE_URL=http://localhost:8081 \
+  PAYMENT_SERVICE_URL=http://localhost:8082 \
+  go run ./gateway/cmd/gateway
+
+# Terminal D — Notification Worker (no HTTP, RabbitMQ consumer)
+cd backend
+DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
+  JWT_SECRET=super-secret-key-for-development-min-32 \
+  RABBITMQ_URL=amqp://guest:guest@localhost:5672/ \
+  go run ./notification-worker/cmd/worker
+```
+
+Wait for the 3 HTTP services to log "listening" before continuing.
+
+### Step 3 — Start the frontend
+
+```bash
+# Terminal E — Vite dev (port 3000)
 cd frontend
-npm install
-cp ../.env.example .env       # or just VITE_API_URL=http://localhost:8080/api/v1
-npm run dev                   # start on :5173 (Vite dev server)
+npm install     # first time only
+npm run dev     # or: bun run dev / pnpm dev
 ```
 
-Frontend dev URL: `http://localhost:5173` (proxies API to `http://localhost:8080`)
+The Vite config proxies `/api/*` and `/uploads/*` to `http://localhost:8080` (the gateway).
+
+### Step 4 — Open the app
+
+```bash
+open http://localhost:3000
+```
+
+### Quick health check
+
+```bash
+# Gateway
+curl http://localhost:8080/healthz
+# → {"service":"api-gateway","status":"ok","upstream":{...}}
+
+# Login as officer
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"officer@example.com","password":"password123"}'
+# → {"success":true,"data":{"token":"...","user":{...}}}
+
+# Hit history (with the token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/history
+```
+
+If any of these fail with `ECONNREFUSED` or `connection refused`, you skipped
+**Step 2** — go back and start the backend services first.
 
 ---
 
 # Test Accounts (from `.ai/SEED_DATA.md`)
 
-| Role    | Email                | Notes |
-| ------- | -------------------- | ----- |
-| Officer | `officer@example.com`  | Can create violations, manage rules, view all data |
-| Member  | `member@example.com`   | Sees 4 seeded violations (1 PAID, 1 PENDING, 1 FAILED, 1 ready to pay) |
-| Member  | `member2@example.com`  | No violations, for variety in officer screens |
+| Role    | Email                 | Password      | Notes |
+| ------- | --------------------- | ------------- | ----- |
+| Officer | `officer@example.com` | `password123` | Can create violations, manage rules, view all data |
+| Member  | `member@example.com`  | `password123` | Sees 4 seeded violations (1 PAID, 1 PENDING, 1 FAILED, 1 ready to pay) |
+| Member  | `member2@example.com` | `password123` | No violations, for variety in officer screens |
 
-Login is **email-only** (no password) — the gateway returns a JWT immediately.
-
----
-
-# Payment Testing
-
-The payment provider is **mocked in-process** (no external call). See `ARCHITECTURE_DECISION.md` ADR-012.
-
-When paying an invoice, the UI lets you choose a scenario:
-
-| Scenario    | Mock response | Invoice status after | Retriable? |
-| ----------- | ------------- | -------------------- | ---------- |
-| `success`   | `paid`        | `PAID` (terminal)    | No         |
-| `failed`    | `failed`      | `FAILED`             | **Yes** — member can retry |
-
-The HTTP response is **200** for both scenarios; the body's `status` field reflects
-the outcome. The `INVOICE_ALREADY_PAID` error is returned only if a `PAID` invoice
-is paid again. See `API_CONTRACTS.md` and `ERROR_CATALOG.md`.
+All passwords are hashed with bcrypt (`DefaultCost`). Login failure (wrong
+email OR wrong password) returns the same `401 UNAUTHORIZED` to avoid leaking
+which case occurred (see ADR-006).
 
 ---
 
-# Rule Versioning — Why History is Immutable
+# Payment Testing (Midtrans)
 
-When an officer creates a violation, the service:
-1. Loads the **currently active** rule version.
-2. Calculates the fine using that version's `FineRuleDetail`.
-3. **Persists** the violation with:
-   - `rule_version_id` (FK, frozen)
-   - `fine_amount` (frozen)
-   - `calculation_snapshot` (JSONB, frozen — contains base, multipliers, snapshot of inputs)
+The payment integration uses the **real Midtrans Snap sandbox**. When a member
+clicks "Pay with Midtrans" in the Invoices page, the frontend calls
+`POST /api/v1/payments/snap-token` → backend calls Midtrans → returns
+`snap_token` → frontend opens `window.snap.pay(token, callbacks)`.
 
-When an officer later publishes **Rule Version 2** (e.g. higher base amounts):
-- The new version is activated.
-- **No existing violation is touched.** The history view reads `calculation_snapshot`
-  and `rule_version_id` directly — it never recomputes.
+**Payment methods** enabled: `qris, gopay` (configurable via
+`MIDTRANS_ENABLED_METHODS=qris,gopay,shopeepay,dana,...`).
 
-This is the **core invariant** of the assignment. See `BUSINESS_RULES.md` and
-`TESTING_STRATEGY.md` "Historical Fine Preservation".
+### Sandbox test flow
+
+1. Open `http://localhost:3000` → log in as `member@example.com`
+2. Sidebar → **My Invoices** → click **Pay with Midtrans** on a PENDING invoice
+3. Midtrans Snap UI opens in a popup/modal
+4. Choose **GoPay** or **QRIS** (sandbox mode — no real money)
+5. For GoPay, Midtrans shows a **simulator phone number** in sandbox — use any
+   number like `081234567890` and the test will auto-approve.
+6. For QRIS, Midtrans shows a QR code you can scan with the Midtrans sandbox
+   app (or the auto-approve page).
+7. On success, you return to the Invoices page with the status now **PAID**.
+
+The payment record is stored in the `payments` table with the full Midtrans
+response (transaction_id, payment_method, transaction_status) in
+`midraw_response` (JSONB) for debugging. See `ARCHITECTURE_DECISION.md` ADR-012.
+
+**To use a different Midtrans key**, edit `.env`:
+
+```env
+MIDTRANS_SERVER_KEY=SB-Mid-server-XXXXXX   # your sandbox key
+MIDTRANS_ENV=sandbox                       # or production
+MIDTRANS_ENABLED_METHODS=qris,gopay,shopeepay
+```
 
 ---
 
@@ -229,18 +324,20 @@ This is the **core invariant** of the assignment. See `BUSINESS_RULES.md` and
 
 Base URL: `http://localhost:8080/api/v1`
 
-Full contract: `API_CONTRACTS.md`.
+Full contract: `API_CONTRACTS.md`. The frontend never calls the backend
+services directly — it goes through the gateway.
 
 | Method | Path                          | Role         | Purpose |
 | ------ | ----------------------------- | ------------ | ------- |
-| POST   | `/auth/login`                 | any          | Mocked login, returns JWT |
+| POST   | `/auth/login`                 | any          | Email + password login, returns JWT |
 | POST   | `/uploads/violations`         | OFFICER      | Upload photo, returns `photo_url` |
 | POST   | `/violations`                 | OFFICER      | Create violation (auto-calculates fine) |
 | GET    | `/violations`                 | any (own)    | List violations |
 | GET    | `/violations/{id}`            | any (own)    | Get violation detail |
 | GET    | `/invoices`                   | any (own)    | List invoices |
 | GET    | `/invoices/{id}`              | any (own)    | Get invoice + latest payment |
-| POST   | `/payments`                   | MEMBER       | Pay an invoice (choose scenario) |
+| POST   | `/payments/snap-token`        | MEMBER       | Create Midtrans Snap token (returns `snap_token` + `redirect_url`) |
+| POST   | `/payments/notification`      | public       | Midtrans webhook callback (no auth) |
 | GET    | `/history`                    | any (own)    | Aggregated history with rule version |
 | GET    | `/rules`                      | OFFICER      | List rule versions |
 | GET    | `/rules/{id}`                 | OFFICER      | Get version + all details |
@@ -248,29 +345,37 @@ Full contract: `API_CONTRACTS.md`.
 | POST   | `/rules`                      | OFFICER      | Create draft version |
 | POST   | `/rules/{id}/publish`         | OFFICER      | Publish draft (atomic activate) |
 | GET    | `/members`                    | OFFICER      | Member lookup for officer screens |
+| GET    | `/payments`                   | any          | List payments |
+| GET    | `/payments/{id}`              | any (own)    | Get payment detail |
+
+All `/api/v1/*` routes (except `/auth/login` and `/payments/notification`) require a `Authorization: Bearer <jwt>` header.
 
 ---
 
 # Project Layout
 
-See `.ai/FOLDER_STRUCTURE.md` for the full layout. Quick view:
-
 ```
 parking_violation_portal/
 ├── backend/
-│   ├── gateway/                # API Gateway (port 8080)
-│   ├── violation-service/      # Rules, violations, invoices, uploads (port 8081)
-│   ├── payment-service/        # Mock payment provider (port 8082)
-│   ├── notification-worker/    # RabbitMQ consumer
-│   └── pkg/                    # Cross-service Go types
-├── frontend/                   # Vite + React + TS
-├── storage/                    # Photo uploads (mounted volume)
-├── docs/                       # DESIGN.md assets (ERD, data flow)
+│   ├── gateway/                  # API Gateway (port 8080) - ADR-009
+│   ├── violation-service/        # Rules, violations, invoices, uploads (port 8081)
+│   ├── payment-service/          # Midtrans Snap integration (port 8082)
+│   ├── notification-worker/      # RabbitMQ consumer
+│   └── pkg/                      # Cross-service Go types (auth, events, etc)
+├── frontend/                     # Vite + React + TS (706 baris TS)
+│   ├── src/
+│   │   ├── lib/api.ts            # axios + JWT + 401 handler + friendly errors
+│   │   ├── store/auth.ts         # zustand auth store
+│   │   ├── components/Layout.tsx # role-aware sidebar
+│   │   └── pages/                # LoginPage, DashboardPage, ViolationsPage, etc
+│   └── README.md                 # frontend-specific notes
+├── storage/                      # Photo uploads (mounted volume)
+├── docs/                         # DESIGN.md assets (ERD, data flow)
 ├── docker-compose.yml
-├── .env.example
+├── .env.example                  # copy to .env
 ├── DESIGN.md
-├── README.md
-└── .ai/                        # Design documentation (17 files)
+├── README.md                     # this file
+└── .ai/                          # Design documentation (17 files)
 ```
 
 ---
@@ -278,8 +383,9 @@ parking_violation_portal/
 # Assumptions
 
 1. One violation generates **exactly one** invoice (no installments, no partial payments).
-2. The payment provider is **mocked in-process** — no real network call. The
-   `scenario` query param drives the outcome for testing.
+2. The payment integration is **real Midtrans Snap** (sandbox key) — not a mock.
+   The Snap UI opens in the browser and the test card / QRIS simulator
+   completes the flow end-to-end. See `ARCHITECTURE_DECISION.md` ADR-012.
 3. **Login uses password + bcrypt** (see ADR-006). All failure cases (email
    not found, wrong password) return the same `401 UNAUTHORIZED` response so
    the API doesn't leak which case occurred. A production system would add
@@ -300,6 +406,8 @@ parking_violation_portal/
    A `storage/violations/` volume is mounted on the violation service.
 10. **RabbitMQ events are best-effort** — they fire after the DB commit, and
     if the broker is down the request still succeeds. See ADR-011.
+11. **Payment methods are configurable** via `MIDTRANS_ENABLED_METHODS`
+    (comma-separated). Default: `qris,gopay`.
 
 ---
 
@@ -323,10 +431,13 @@ slice needs to be runnable with `docker compose up` and nothing else. The
 `storage/violations/` volume persists uploads across container restarts.
 See ADR-010.
 
-## In-process mock payment provider
-The assignment explicitly says "Mock response from payment provider in
-internal service." The `PaymentService.charge()` is a Go function, not an
-HTTP call. This keeps the slice self-contained.
+## Real Midtrans (not mock)
+The original assignment asked for a mock payment provider. We went a step
+further and integrated the **real Midtrans Snap sandbox** so reviewers can
+see a real Snap UI open, choose GoPay/QRIS, and complete the flow. The cost
+is one environment variable (`MIDTRANS_SERVER_KEY`). To revert to a mock,
+set the key to `MOCK_anything` and the client returns a fake token (see
+`midtrans/client.go`). See ADR-012.
 
 ---
 
