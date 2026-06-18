@@ -3,6 +3,7 @@
 package events
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,25 @@ func New(eventType string, payload any) Envelope {
 		OccurredAt: time.Now().UTC(),
 		Payload:    payload,
 	}
+}
+
+// DecodeEnvelope parses a raw AMQP body into an Envelope.
+func DecodeEnvelope(body []byte) (*Envelope, error) {
+	var e Envelope
+	if err := json.Unmarshal(body, &e); err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
+// PayloadMap returns env.Payload as a map[string]any, or an empty map if
+// it isn't one. Use this in handlers that need to inspect individual
+// fields without writing type assertions everywhere.
+func (e *Envelope) PayloadMap() map[string]any {
+	if m, ok := e.Payload.(map[string]any); ok {
+		return m
+	}
+	return map[string]any{}
 }
 
 // Routing keys (see .ai/NOTIFICATIONS.md).
