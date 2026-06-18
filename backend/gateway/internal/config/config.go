@@ -4,8 +4,11 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
+
+	"github.com/parking-portal/backend/pkg/dotenv"
 )
 
 // Config is the fully-resolved configuration for the gateway.
@@ -26,7 +29,16 @@ type Config struct {
 	UpstreamTimeoutSeconds int
 }
 
+// Load reads env vars and returns a Config or an error.
+//
+// On startup, the project-root .env file is auto-loaded (walking up from the
+// current working directory) so `go run ./gateway/cmd/gateway` works out
+// of the box. Existing shell / docker-compose env vars always win.
 func Load() (*Config, error) {
+	if path, err := dotenv.AutoLoad(); err != nil {
+		log.Printf("config: dotenv load %s: %v", path, err)
+	}
+
 	cfg := &Config{
 		AppEnv:  getenv("APP_ENV", "development"),
 		AppName: getenv("APP_NAME", "API Gateway"),

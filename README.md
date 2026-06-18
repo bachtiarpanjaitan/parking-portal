@@ -14,6 +14,7 @@ The system lets officers issue parking violations, calculate fines using **versi
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Prerequisites](#prerequisites)
+- [Makefile Shortcuts](#makefile-shortcuts) ⭐
 - [Quick Start](#quick-start) ⭐
   - [Option A: Docker Compose (easiest)](#option-a-docker-compose-easiest)
   - [Option B: Local dev (no Docker)](#option-b-local-dev-no-docker) ⭐
@@ -131,6 +132,54 @@ For the Midtrans Snap UI in the browser, no extra setup — it loads from `app.s
 
 ---
 
+# Makefile Shortcuts
+
+> Every common workflow is a one-liner via the `Makefile` at the repo root.
+> Run `make help` to print the full list at any time.
+
+| Target                | What it does                                                                |
+| --------------------- | --------------------------------------------------------------------------- |
+| `make help`           | Print all targets with their descriptions.                                  |
+| `make up`             | `docker compose up -d --build` — start **everything** (infra + 4 services + frontend). |
+| `make down`           | `docker compose down` — stop everything.                                    |
+| `make logs`           | Tail logs from all compose services.                                        |
+| `make ps`             | List running compose services.                                              |
+| `make build`          | Build all docker images.                                                    |
+| `make rebuild SVC=X`  | Rebuild a single service image (e.g. `SVC=violation-service`).              |
+| `make migrate`        | Run SQL migrations against the violation-service DB (via compose).          |
+| `make seed`           | Seed demo users + violations + invoices (idempotent).                       |
+| `make fresh`          | **Destructive** — drop volumes, re-init DB, re-seed, restart everything.    |
+| `make test`           | Run all Go unit tests (`cd backend && go test ./...`).                      |
+| `make fmt`            | `gofmt -w` across the backend.                                              |
+| `make tidy`           | `go mod tidy` in the backend.                                               |
+| `make clean`          | `docker compose down -v` + remove build artifacts.                          |
+| `make run-violation`  | Run the **violation service** locally via `go run` (loads `../.env`).       |
+| `make run-payment`    | Run the **payment service** locally via `go run` (loads `../.env`).         |
+| `make run-gateway`    | Run the **API gateway** locally via `go run` (loads `../.env`).             |
+| `make run-worker`     | Run the **notification worker** locally via `go run` (loads `../.env`).      |
+
+### Why `make run-*` Just Works
+
+The Go services auto-load the project-root `.env` file on startup via
+`backend/pkg/dotenv` (a tiny, dependency-free loader that walks up from
+the current working directory). That means:
+
+- No need to prefix every command with `JWT_SECRET=... DB_USER=...`.
+- No need to `cp .env backend/.env`.
+- Existing shell env vars always win over the file (so Docker / CI keep working).
+
+If you ever need to override a single value, just inline it as usual:
+
+```bash
+DB_USER=myuser make run-violation
+```
+
+> **Heads up:** the `run-*` targets assume you want to point at local infra
+> (`localhost:5432`, `localhost:5672`). If you're running everything in
+> Docker, prefer `make up` instead.
+
+---
+
 # Quick Start
 
 ## Option A: Docker Compose (easiest)
@@ -145,7 +194,8 @@ cp .env.example .env
 #    The default key in .env.example is a public demo key (works for dev).
 
 # 3. Build + start everything
-docker compose up -d --build
+make up
+# (equivalent to: docker compose up -d --build)
 
 # 4. Open the app
 open http://localhost:3000          # Frontend (Vite dev)
@@ -180,56 +230,41 @@ Verify:
 ### Step 1 — `.env` + migrations + seed
 
 ```bash
-cd backend
-
-cp ../.env.example .env
+cp .env.example .env
 
 # Apply all 11 migrations
-go run ./violation-service/cmd/migrate -dir ./violation-service/migrations
+make migrate
 
 # Seed 3 users + 4 violations + 4 invoices
-go run ./violation-service/cmd/seed
+make seed
 ```
+
+> Both `make migrate` and `make seed` run inside the `violation-service`
+> container, so they pick up the same `.env` automatically.
 
 ### Step 2 — Start the 4 backend services (separate terminals)
 
+The Go services auto-load `../.env` (see [Makefile Shortcuts](#makefile-shortcuts)),
+so these are now one-liners:
+
 ```bash
 # Terminal A — Violation Service (port 8081)
-cd backend
-DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
-  JWT_SECRET=super-secret-key-for-development-min-32 \
-  APP_PORT=8081 STORAGE_PATH=/tmp/ps PUBLIC_UPLOAD_URL=/uploads \
-  go run ./violation-service/cmd/api
+make run-violation
 
 # Terminal B — Payment Service (port 8082)
-cd backend
-DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
-  JWT_SECRET=super-secret-key-for-development-min-32 \
-  APP_PORT=8082 \
-  MIDTRANS_SERVER_KEY=SB-Mid-server-XVkeSQW-v9dG1TJa29FbjxXG \
-  MIDTRANS_ENV=sandbox \
-  MIDTRANS_ENABLED_METHODS=qris,gopay \
-  VIOLATION_SERVICE_URL=http://localhost:8081 \
-  go run ./payment-service/cmd/api
+make run-payment
 
 # Terminal C — API Gateway (port 8080)  <-- THE FRONTEND TALKS TO THIS
-cd backend
-DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
-  JWT_SECRET=super-secret-key-for-development-min-32 \
-  APP_PORT=8080 \
-  VIOLATION_SERVICE_URL=http://localhost:8081 \
-  PAYMENT_SERVICE_URL=http://localhost:8082 \
-  go run ./gateway/cmd/gateway
+make run-gateway
 
 # Terminal D — Notification Worker (no HTTP, RabbitMQ consumer)
-cd backend
-DB_USER=bachtiarpanjaitan DB_PASSWORD=bachtiarpanjaitan DB_HOST=localhost \
-  JWT_SECRET=super-secret-key-for-development-min-32 \
-  RABBITMQ_URL=amqp://guest:guest@localhost:5672/ \
-  go run ./notification-worker/cmd/worker
+make run-worker
 ```
 
 Wait for the 3 HTTP services to log "listening" before continuing.
+
+> **Need to override a single value?** Inline it on the command line:
+> `DB_USER=myuser APP_PORT=9090 make run-violation`
 
 ### Step 3 — Start the frontend
 
@@ -361,8 +396,9 @@ parking_violation_portal/
 │   ├── violation-service/        # Rules, violations, invoices, uploads (port 8081)
 │   ├── payment-service/          # Midtrans Snap integration (port 8082)
 │   ├── notification-worker/      # RabbitMQ consumer
-│   └── pkg/                      # Cross-service Go types (auth, events, etc)
-├── frontend/                     # Vite + React + TS (706 baris TS)
+│   ├── pkg/                      # Cross-service Go types (auth, events, dotenv, etc)
+│   └── pkg/dotenv/               # Tiny .env auto-loader (no external deps)
+├── frontend/                     # Vite + React + TS
 │   ├── src/
 │   │   ├── lib/api.ts            # axios + JWT + 401 handler + friendly errors
 │   │   ├── store/auth.ts         # zustand auth store
@@ -372,6 +408,7 @@ parking_violation_portal/
 ├── storage/                      # Photo uploads (mounted volume)
 ├── docs/                         # DESIGN.md assets (ERD, data flow)
 ├── docker-compose.yml
+├── Makefile                      # Convenience targets (make up, make run-*, ...)
 ├── .env.example                  # copy to .env
 ├── DESIGN.md
 ├── README.md                     # this file
@@ -463,6 +500,7 @@ set the key to `MOCK_anything` and the client returns a fake token (see
 - ✅ `DESIGN.md` — data flow + ERD (draw.io, attached as images in `docs/`)
 - ✅ Working source code (Go + React + TypeScript)
 - ✅ Docker Compose configuration
+- ✅ Makefile convenience targets (`make help` to list)
 - ✅ `.ai/` design documentation (17 files, self-consistent)
 - ✅ Seed data + migrations
-- ✅ Unit tests for fine engine and rule versioning
+- ✅ Unit tests for fine engine, rule versioning, and dotenv loader
