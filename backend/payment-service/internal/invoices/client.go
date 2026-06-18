@@ -97,14 +97,17 @@ func (c *Client) GetInvoice(ctx context.Context, id uuid.UUID) (*Invoice, error)
 	return env.Data, nil
 }
 
-// SetStatus calls PATCH /api/v1/invoices/{id}/status (or PUT, whichever the
-// violation-service exposes). We assume the violation-service exposes a
-// status update endpoint with a body { "status": "PAID" | "FAILED" }.
+// SetStatus calls PATCH /api/v1/invoices/{id}/status with a body of
+// {"status": "<PENDING|PAID|FAILED|CANCELLED>"}.
 //
-// NOTE: the current violation-service does NOT yet have a dedicated
-// PATCH /invoices/{id}/status endpoint — it only mutates status via the
-// payment service itself. This client falls back to a no-op if the
-// endpoint is not present (we log + continue).
+// The endpoint is implemented by the violation-service and is gated to
+// OFFICER-role tokens; the payment service mints a service-to-service JWT
+// in main.go for exactly this purpose.
+//
+// 409 (CONFLICT) responses — typically "PAID → PAID is no-op" or
+// "cannot change a PAID invoice" — are treated as soft-success: the local
+// payment row already reflects the correct outcome, so we don't fail the
+// webhook / refresh.
 func (c *Client) SetStatus(ctx context.Context, id uuid.UUID, status string) error {
 	body, _ := json.Marshal(map[string]string{"status": status})
 	req, err := http.NewRequestWithContext(ctx, "PATCH",
@@ -122,14 +125,14 @@ func (c *Client) SetStatus(ctx context.Context, id uuid.UUID, status string) err
 		return fmt.Errorf("set status: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == 404 {
-		// Endpoint doesn't exist (yet) — log and continue. The payment
-		// service can still record the payment outcome in its own DB.
+	respBody, _ := io.ReadAll(resp.Body)
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
-	}
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
+	case resp.StatusCode == 409:
+		// Already PAID, or invalid transition — soft success.
+		return nil
+	default:
 		return fmt.Errorf("set status %d: %s", resp.StatusCode, string(respBody))
 	}
-	return nil
 }

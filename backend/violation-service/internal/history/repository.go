@@ -40,7 +40,7 @@ const baseSelectFragment = `
 		SELECT v.id, v.member_id, v.license_plate, v.violation_type,
 		       v.location, v.violation_timestamp, v.fine_amount, v.photo_url,
 		       v.rule_version_id, frv.version_number,
-		       i.id, COALESCE(i.status, ''), COALESCE(i.amount, 0),
+		       COALESCE(i.id::text, ''), COALESCE(i.status, ''), COALESCE(i.amount, 0),
 		       COALESCE(p.status, ''), COALESCE(p.midtrans_transaction_status, ''),
 		       v.calculation_snapshot
 		FROM violations v

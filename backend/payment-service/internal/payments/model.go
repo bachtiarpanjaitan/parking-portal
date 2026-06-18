@@ -9,10 +9,16 @@ import (
 )
 
 // Payment is the local DB record for a Midtrans transaction attempt.
+//
+// TransactionID mirrors the legacy `payments.transaction_id` column (kept
+// for backwards-compatibility with the rest of the system that still reads
+// from it). UpdateStatus overwrites it with the real Midtrans id once the
+// transaction settles.
 type Payment struct {
 	ID                        uuid.UUID       `json:"id"`
 	InvoiceID                 uuid.UUID       `json:"invoice_id"`
 	Amount                    decimal.Decimal `json:"amount"`
+	TransactionID             string          `json:"transaction_id"`
 	Status                    string          `json:"status"`
 	PaymentMethod             *string         `json:"payment_method,omitempty"`
 	MidtransOrderID           string          `json:"midtrans_order_id"`

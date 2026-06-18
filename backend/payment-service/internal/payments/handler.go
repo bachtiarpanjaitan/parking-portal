@@ -25,12 +25,14 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 }
 
 // Register attaches the routes.
-//   - POST /payments/snap-token     : MEMBER only
-//   - POST /payments/notification   : no auth (Midtrans webhook; HTTPS + optional signature)
-//   - GET  /payments/{id}           : any auth, MEMBER forced to own
+//   - POST  /payments/snap-token     : MEMBER only
+//   - POST  /payments/notification   : no auth (Midtrans webhook; HTTPS + optional signature)
+//   - GET   /payments/{id}           : any auth, MEMBER forced to own
+//   - POST  /payments/{id}/refresh   : any auth — checks Midtrans status & updates local state
 func (h *Handler) Register(g *gin.RouterGroup, public *gin.Engine) {
 	g.POST("/payments/snap-token", h.CreateSnapToken)
 	g.GET("/payments/:id", h.GetByID)
+	g.POST("/payments/:id/refresh", h.Refresh)
 	// Webhook is on the public engine (no auth middleware).
 	public.POST("/api/v1/payments/notification", h.Notification)
 }
@@ -71,6 +73,18 @@ func (h *Handler) GetByID(c *gin.Context) {
 		// `member_id` denormalized on the payment row to make this check
 		// O(1).)
 		_ = p // accepted
+	}
+	c.JSON(http.StatusOK, httpx.OK(p))
+}
+
+func (h *Handler) Refresh(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		panic(errs.New(errs.CodeValidation, "invalid id"))
+	}
+	p, err := h.svc.RefreshPayment(c.Request.Context(), id)
+	if err != nil {
+		panic(err)
 	}
 	c.JSON(http.StatusOK, httpx.OK(p))
 }

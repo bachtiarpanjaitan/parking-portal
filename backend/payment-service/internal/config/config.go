@@ -79,16 +79,13 @@ func Load() (*Config, error) {
 		MidtransReturnURL:       getenv("MIDTRANS_RETURN_URL", ""),
 	}
 
-	// Parse comma-separated enabled methods
-	raw := getenv("MIDTRANS_ENABLED_METHODS", "qris,gopay")
+	// Parse comma-separated enabled methods (empty = all methods from Midtrans dashboard)
+	raw := getenv("MIDTRANS_ENABLED_METHODS", "")
 	for _, m := range strings.Split(raw, ",") {
 		m = strings.TrimSpace(m)
 		if m != "" {
 			cfg.MidtransEnabledMethods = append(cfg.MidtransEnabledMethods, m)
 		}
-	}
-	if len(cfg.MidtransEnabledMethods) == 0 {
-		cfg.MidtransEnabledMethods = []string{"qris", "gopay"}
 	}
 
 	cfg.DBMaxConns = int32(getenvInt("DB_MAX_CONNS", 10))

@@ -27,6 +27,10 @@ func NewHandler(svc *Service, log *zap.Logger) *Handler {
 func (h *Handler) Register(g *gin.RouterGroup) {
 	g.GET("/invoices", h.List)
 	g.GET("/invoices/:id", h.Get)
+	// Internal: called by the payment service after Midtrans settles a payment.
+	// Only OFFICER (or the service-to-service JWT minted by payment-service)
+	// is allowed to mutate status — never MEMBER.
+	g.PATCH("/invoices/:id/status", h.SetStatus)
 }
 
 func (h *Handler) List(c *gin.Context) {
@@ -60,6 +64,43 @@ func (h *Handler) Get(c *gin.Context) {
 	}
 	if middleware.Role(c) == "MEMBER" && inv.MemberID != middleware.UserID(c) {
 		panic(errs.New(errs.CodeForbidden, "cannot access another member's invoice"))
+	}
+	c.JSON(http.StatusOK, httpx.OK(inv))
+}
+
+// SetStatusRequest is the body for PATCH /invoices/:id/status.
+type SetStatusRequest struct {
+	Status string `json:"status"`
+}
+
+// SetStatus is called by the payment service after a Midtrans webhook or
+// client-side refresh settles a payment. Only OFFICER-role tokens may call
+// this endpoint (the payment service mints an OFFICER service-to-service JWT
+// in main.go). MEMBER tokens are rejected with FORBIDDEN.
+func (h *Handler) SetStatus(c *gin.Context) {
+	if middleware.Role(c) != "OFFICER" {
+		panic(errs.New(errs.CodeForbidden, "only officers may mutate invoice status"))
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		panic(errs.New(errs.CodeValidation, "invalid id"))
+	}
+	var req SetStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		panic(errs.New(errs.CodeValidation, "invalid request body"))
+	}
+	switch req.Status {
+	case "PENDING", "PAID", "FAILED", "CANCELLED":
+		// ok
+	default:
+		panic(errs.New(errs.CodeValidation, "status must be one of PENDING|PAID|FAILED|CANCELLED"))
+	}
+	if err := h.svc.SetStatus(c.Request.Context(), id, req.Status); err != nil {
+		panic(err)
+	}
+	inv, err := h.svc.Get(c.Request.Context(), id)
+	if err != nil {
+		panic(err)
 	}
 	c.JSON(http.StatusOK, httpx.OK(inv))
 }

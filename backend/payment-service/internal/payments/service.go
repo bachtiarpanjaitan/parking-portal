@@ -38,8 +38,58 @@ func NewService(repo Repository, inv InvoiceFetcher, mid *midtrans.Client, ev Ev
 }
 
 // CreateSnapToken implements POST /payments/snap-token.
+//
+// Defensive ordering (the cross-service invoice status can lag the local
+// payment DB by a few hundred ms after a webhook/refresh settles the
+// payment, but the *local* payment row is the source of truth):
+//
+//  1. Look up the local payment for this invoice first.
+//     - If a PAID payment exists → return its id (no snap_token) so the
+//     client refetches and shows PAID. We never mint a second order.
+//     - If a PENDING payment exists → re-sync with Midtrans and either
+//     reuse the snap_token or return the new terminal status.
+//     - If FAILED/EXPIRED → fall through to create a new payment.
+//  2. Fetch the invoice to authorize the member and validate the status.
+//     - PENDING / FAILED are payable. PAID → 409. CANCELLED → 422.
+//  3. Mint a fresh Midtrans order_id + snap_token, persist a new payment.
 func (s *Service) CreateSnapToken(ctx context.Context, memberID uuid.UUID, invoiceID uuid.UUID) (*CreateSnapTokenResponse, error) {
-	// 1. Fetch the invoice from the violation-service to validate it.
+	// 1. Existing-payment guard (source of truth).
+	existing, err := s.repo.FindByInvoiceID(ctx, invoiceID)
+	if err != nil && !strings.Contains(err.Error(), "not found") {
+		return nil, err
+	}
+	if existing != nil {
+		switch existing.Status {
+		case "PAID":
+			// Idempotent: don't mint a new order, just tell the client to refetch.
+			return &CreateSnapTokenResponse{
+				PaymentID: existing.ID,
+				OrderID:   existing.MidtransOrderID,
+			}, nil
+		case "PENDING":
+			// Refresh from Midtrans and return existing token (or new status).
+			refreshed, rErr := s.RefreshPayment(ctx, existing.ID)
+			if rErr != nil {
+				return nil, rErr
+			}
+			if refreshed.Status == "PENDING" && refreshed.MidtransSnapToken != nil {
+				return &CreateSnapTokenResponse{
+					PaymentID: refreshed.ID,
+					OrderID:   refreshed.MidtransOrderID,
+					SnapToken: *refreshed.MidtransSnapToken,
+				}, nil
+			}
+			if refreshed.Status == "PAID" {
+				return &CreateSnapTokenResponse{
+					PaymentID: refreshed.ID,
+					OrderID:   refreshed.MidtransOrderID,
+				}, nil
+			}
+			// FAILED/EXPIRED/CANCELLED → fall through to create new.
+		}
+	}
+
+	// 2. Fetch the invoice (only if we are about to create a new payment).
 	inv, err := s.inv.GetInvoice(ctx, invoiceID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
@@ -47,29 +97,31 @@ func (s *Service) CreateSnapToken(ctx context.Context, memberID uuid.UUID, invoi
 		}
 		return nil, errs.Wrap(errs.CodeInternal, "fetch invoice", err)
 	}
-	// 2. Authorization: invoice must belong to the calling member.
+	// 2a. Authorization: invoice must belong to the calling member.
 	if inv.MemberID != memberID {
 		return nil, errs.New(errs.CodeForbidden, "cannot pay another member's invoice")
 	}
-	// 3. Status: PENDING or FAILED is payable; PAID is not.
+	// 2b. Status: PENDING or FAILED is payable; PAID / CANCELLED are not.
 	switch inv.Status {
 	case "PAID":
 		return nil, errs.New(errs.CodeInvoiceAlreadyPaid, "invoice already paid")
 	case "CANCELLED":
 		return nil, errs.New(errs.CodeInvalidInvStatus, "invoice is cancelled")
 	}
-	// 4. Build order_id (deterministic from invoice_id, so a member retrying
-	// the same invoice gets a new Snap token but the same order_id — this
-	// is the Midtrans-recommended way to handle retries).
-	orderID := "ORDER-" + invoiceID.String()
 
-	// 5. Create the Snap token via Midtrans.
+	// 3. Mint a fresh Midtrans order_id (Midtrans rejects duplicate
+	//    order_ids, so we always generate a new one for new attempts).
+	orderID := fmt.Sprintf("ORD-%s-%s", invoiceID.String()[:8], uuid.NewString()[:6])
+
+	// 4. Create the Snap token via Midtrans.
 	snap, err := s.mid.CreateSnapToken(ctx, orderID, inv.AmountInt())
 	if err != nil {
 		return nil, errs.New(errs.CodeInternal, "midtrans snap: "+err.Error())
 	}
 
-	// 6. Persist the payment row in PENDING state.
+	// 5. Persist the new payment row. If a FAILED/EXPIRED/CANCELLED row
+	//    already exists for this invoice, replace it so we never end up
+	//    with >1 row per invoice.
 	now := time.Now().UTC()
 	token := snap.Token
 	p := &Payment{
@@ -82,10 +134,15 @@ func (s *Service) CreateSnapToken(ctx context.Context, memberID uuid.UUID, invoi
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
-	// Stash the snap response for debugging
 	p.MidrawResponse = snap
-	if err := s.repo.Insert(ctx, p); err != nil {
-		return nil, err
+	if existing != nil {
+		if err := s.repo.ReplaceByInvoiceID(ctx, p); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := s.repo.Insert(ctx, p); err != nil {
+			return nil, err
+		}
 	}
 
 	return &CreateSnapTokenResponse{
@@ -169,4 +226,42 @@ func (s *Service) mapStatus(txStatus string) (string, string) {
 // Get returns one payment.
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*Payment, error) {
 	return s.repo.FindByID(ctx, id)
+}
+
+// RefreshPayment fetches the latest transaction status from Midtrans and
+// updates the local payment + invoice status. This is the client-side
+// equivalent of the Midtrans webhook (useful for local dev where the
+// webhook cannot reach localhost).
+func (s *Service) RefreshPayment(ctx context.Context, paymentID uuid.UUID) (*Payment, error) {
+	p, err := s.repo.FindByID(ctx, paymentID)
+	if err != nil {
+		return nil, err
+	}
+	// If no midtrans_order_id (e.g. seed data), nothing to refresh.
+	if p.MidtransOrderID == "" {
+		return p, nil
+	}
+
+	// Ask Midtrans for the current transaction status.
+	status, err := s.mid.GetStatus(ctx, p.MidtransOrderID)
+	if err != nil {
+		return nil, errs.Wrap(errs.CodeInternal, "midtrans get status", err)
+	}
+
+	newStatus, invStatus := s.mapStatus(status.TransactionStatus)
+	method := status.PaymentType
+	txID := status.TransactionID
+	txStatus := status.TransactionStatus
+
+	// Update the local payment row.
+	if err := s.repo.UpdateStatus(ctx, p.ID, newStatus, &method, &txID, &txStatus, status); err != nil {
+		return nil, err
+	}
+	// Update the invoice status via the violation-service (best-effort).
+	if err := s.inv.SetStatus(ctx, p.InvoiceID, invStatus); err != nil {
+		fmt.Println("warn: refresh set invoice status:", err)
+	}
+
+	// Return the updated payment.
+	return s.repo.FindByID(ctx, paymentID)
 }

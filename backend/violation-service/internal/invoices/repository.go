@@ -25,6 +25,7 @@ type Repository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*Invoice, error)
 	FindByIDWithLatest(ctx context.Context, id uuid.UUID) (*InvoiceWithLatest, error)
 	List(ctx context.Context, f Filter) ([]Invoice, int, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
 }
 
 type pgRepo struct{ db *pgxpool.Pool }
@@ -122,6 +123,23 @@ func (r *pgRepo) List(ctx context.Context, f Filter) ([]Invoice, int, error) {
 		return nil, 0, errs.Wrap(errs.CodeInternal, "count invoices", err)
 	}
 	return out, total, nil
+}
+
+// UpdateStatus mutates the invoice status. PAID is terminal: callers cannot
+// revert it (the DB CHECK constraint also enforces this — see migration 0006).
+// Returns INVOICE_NOT_FOUND if no row matches.
+func (r *pgRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	tag, err := r.db.Exec(ctx,
+		`UPDATE invoices SET status = $1, updated_at = now() WHERE id = $2`,
+		status, id,
+	)
+	if err != nil {
+		return errs.Wrap(errs.CodeInternal, "update invoice status", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errs.New(errs.CodeInvoiceNotFound, "invoice not found")
+	}
+	return nil
 }
 
 func itoa(i int) string {

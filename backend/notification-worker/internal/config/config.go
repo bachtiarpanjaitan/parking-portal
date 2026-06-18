@@ -4,9 +4,12 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/parking-portal/backend/pkg/dotenv"
 )
 
 // Config is the fully-resolved configuration for the worker.
@@ -30,6 +33,10 @@ type Config struct {
 
 // Load reads env vars and returns a Config or an error.
 func Load() (*Config, error) {
+	if path, err := dotenv.AutoLoad(); err != nil {
+		log.Printf("config: dotenv load %s: %v", path, err)
+	}
+
 	cfg := &Config{
 		AppName: getenv("APP_NAME", "Notification Worker"),
 

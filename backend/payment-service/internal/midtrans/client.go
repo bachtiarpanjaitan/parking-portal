@@ -39,7 +39,7 @@ type Client struct {
 // SnapRequest is the body of POST /snap/v1/transactions.
 type SnapRequest struct {
 	TransactionDetails TransactionDetails `json:"transaction_details"`
-	EnabledPayments    []string           `json:"enabled_payments"`
+	EnabledPayments    []string           `json:"enabled_payments,omitempty"`
 	Callbacks          *Callbacks         `json:"callbacks,omitempty"`
 }
 
@@ -109,7 +109,9 @@ func (c *Client) CreateSnapToken(ctx context.Context, orderID string, grossAmoun
 	}
 	body := SnapRequest{
 		TransactionDetails: TransactionDetails{OrderID: orderID, GrossAmt: grossAmount},
-		EnabledPayments:    c.methods,
+	}
+	if len(c.methods) > 0 {
+		body.EnabledPayments = c.methods
 	}
 	if c.notificationURL != "" || c.returnURL != "" {
 		body.Callbacks = &Callbacks{Finish: c.returnURL}
