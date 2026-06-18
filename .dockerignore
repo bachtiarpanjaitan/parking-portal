@@ -1,0 +1,38 @@
+# =============================================================================
+# Exclude files from Docker build context
+# =============================================================================
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Local data
+storage/
+*.log
+logs/
+.DS_Store
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Backend
+backend/**/bin/
+backend/**/vendor/
+backend/coverage.out
+backend/coverage.html
+
+# Docs (not needed in images)
+docs/
+
+# Editor
+.vscode/
+.idea/
+
+# Env
+.env
+.env.local
+*.env
+!.env.example

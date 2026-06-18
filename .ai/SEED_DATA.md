@@ -11,13 +11,17 @@
 
 # Users
 
+> **Authentication:** password-based (see ADR-006). All 3 demo users share
+> the same default password: **`password123`** (bcrypt-hashed in the DB).
+
 Officer
 ```json
 {
   "id": "11111111-1111-1111-1111-111111111111",
   "name": "Officer User",
   "email": "officer@example.com",
-  "role": "OFFICER"
+  "role": "OFFICER",
+  "password": "password123"
 }
 ```
 
@@ -27,7 +31,8 @@ Member (primary)
   "id": "22222222-2222-2222-2222-222222222222",
   "name": "Member User",
   "email": "member@example.com",
-  "role": "MEMBER"
+  "role": "MEMBER",
+  "password": "password123"
 }
 ```
 
@@ -37,9 +42,14 @@ Member (second, for variety in officer screens)
   "id": "33333333-3333-3333-3333-333333333333",
   "name": "Member Two",
   "email": "member2@example.com",
-  "role": "MEMBER"
+  "role": "MEMBER",
+  "password": "password123"
 }
 ```
+
+> ⚠️ **Production:** never use `password123`. In production each user sets
+> their own password at signup, hashed with bcrypt, never logged. The seeder
+> is for **demo only**.
 
 ---
 
@@ -172,7 +182,7 @@ Payment `p0000003-...` — status `FAILED`, scenario `failed`, transaction `trx_
 
 ```json
 {
-  "id": "v0000004-0000-0000-0000-000000000004",
+  "id": "10000004-0000-0000-0000-000000000004",
   "member_id": "22222222-2222-2222-2222-222222222222",
   "rule_version_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   "license_plate": "B1234XYZ",
@@ -180,7 +190,7 @@ Payment `p0000003-...` — status `FAILED`, scenario `failed`, transaction `trx_
   "location": "Jl. Kuningan, Jakarta",
   "violation_timestamp": "2026-06-10T10:00:00Z",
   "photo_url": "/uploads/violations/seed-new.jpg",
-  "fine_amount": 75000,
+  "fine_amount": 100000,
   "calculation_snapshot": {
     "rule_version_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     "rule_version_number": 1,
@@ -188,15 +198,16 @@ Payment `p0000003-...` — status `FAILED`, scenario `failed`, transaction `trx_
     "base_amount": 50000,
     "time_multiplier": 1.0,
     "time_window": "DAY",
-    "repeat_multiplier": 1.5,
-    "prior_unpaid_count": 1,
-    "calculated_fine": 75000,
+    "repeat_multiplier": 2.0,
+    "prior_unpaid_count": 2,
+    "calculated_fine": 100000,
     "calculated_at": "2026-06-10T10:00:00Z"
   }
 }
 ```
-> Calculation: 50000 × 1.0 × 1.5 = 75000. The "1 prior unpaid" is V-OLD-3
-> (which is `FAILED`, hence still unpaid in the 90-day window).
+> Calculation: 50000 × 1.0 × 2.0 = 100000. The "2 prior unpaid" are V-OLD-2
+> (`PENDING`) + V-OLD-3 (`FAILED`) — both are unpaid in the 90-day window
+> before T0. See the verification query at the end of this document.
 
 Invoice `i0000004-...` — status `PENDING`
 (no payment yet — member will exercise the success/failed scenario here)
@@ -211,10 +222,13 @@ Invoice `i0000004-...` — status `PENDING`
 | (other)     | 0                                          | 1.0    |
 
 So if a NEW violation is created for `B1234XYZ` at T0, the repeat multiplier
-will be **2.0** (2 prior unpaid). The first violation V-NEW was created with
-only 1 prior unpaid because V-OLD-2 was still PENDING at the time V-NEW was
-seeded; in a fresh DB where seeding is replayed in order, the snapshot already
-captures the count at the time of that violation.
+is **2.0** (2 prior unpaid). The seed violation V-NEW is exactly this case,
+so its `calculation_snapshot` records `prior_unpaid_count: 2`,
+`repeat_multiplier: 2.0`, and `calculated_fine: 100000`.
+
+> ⚠️ **Corrected after first run:** an earlier draft of this file recorded
+> V-NEW with `prior_unpaid_count: 1` and `repeat_multiplier: 1.5`. The seed
+> now matches the verified SQL count above.
 
 ---
 

@@ -37,11 +37,13 @@ The JWT carries `{ sub: user_id, role: OFFICER|MEMBER, exp }`.
 
 ## POST /auth/login
 
-> Mocked auth — pass an email of an existing user in `users` table. No password.
+> Password-based auth (see ADR-006). Bcrypt-hashed passwords stored in
+> `users.password_hash`. All failure cases collapse to `UNAUTHORIZED`
+> ("invalid email or password") to avoid leaking whether the email exists.
 
 **Request:**
 ```json
-{ "email": "officer@example.com" }
+{ "email": "officer@example.com", "password": "password123" }
 ```
 
 **Response 200:**
@@ -50,12 +52,17 @@ The JWT carries `{ sub: user_id, role: OFFICER|MEMBER, exp }`.
   "success": true,
   "data": {
     "token": "jwt_token",
-    "user": { "id": "uuid", "name": "Officer", "role": "OFFICER" }
+    "user": { "id": "uuid", "name": "Officer", "email": "officer@example.com", "role": "OFFICER" }
   }
 }
 ```
 
-**Errors:** `RESOURCE_NOT_FOUND` (unknown email), `VALIDATION_ERROR`.
+> The `user` object does **not** include the password hash.
+
+**Errors:**
+- `VALIDATION_ERROR` (400) — missing `email` or `password`
+- `UNAUTHORIZED` (401) — email not found, OR wrong password (same response)
+- `INTERNAL_SERVER_ERROR` (500) — bcrypt or JWT signing failure
 
 ---
 

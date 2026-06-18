@@ -280,8 +280,10 @@ parking_violation_portal/
 1. One violation generates **exactly one** invoice (no installments, no partial payments).
 2. The payment provider is **mocked in-process** — no real network call. The
    `scenario` query param drives the outcome for testing.
-3. **Login is email-only** (no password) — see ADR-006. A production system
-   would add passwords, refresh tokens, MFA.
+3. **Login uses password + bcrypt** (see ADR-006). All failure cases (email
+   not found, wrong password) return the same `401 UNAUTHORIZED` response so
+   the API doesn't leak which case occurred. A production system would add
+   password reset, refresh tokens, MFA.
 4. The **time window** decision uses half-open intervals (06:00–21:59 = day,
    22:00–05:59 = night) — see the warning at the top of `BUSINESS_RULES.md`.
    This resolves the ambiguity in the assignment PDF.

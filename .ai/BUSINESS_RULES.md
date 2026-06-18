@@ -105,6 +105,24 @@ The 3 values map to the `fine_rule_details` columns `repeat_0`, `repeat_1`,
 
 ---
 
+## Authentication Rules
+
+The system uses **password-based authentication with bcrypt** (ADR-006).
+
+- Each user has a `password_hash` (bcrypt, `DefaultCost`) stored in
+  `users.password_hash`.
+- Login takes `email` + `password` (both required, validated).
+- The service compares the bcrypt hash, never the plaintext.
+- All failure cases (email not found, wrong password, missing hash) return
+  the same `UNAUTHORIZED` response ("invalid email or password") to avoid
+  leaking which case occurred.
+- A successful login returns a signed JWT (`sub`, `role`).
+- The password hash is **never** included in any API response.
+- Default seed password is `password123` for the 3 demo users
+  (see `SEED_DATA.md`). NEVER use in production.
+
+---
+
 ## Payment Rules
 
 - Only invoices in `PENDING` or `FAILED` status can be paid.

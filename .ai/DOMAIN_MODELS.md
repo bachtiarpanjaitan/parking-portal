@@ -13,11 +13,17 @@
 **Roles:** `OFFICER`, `MEMBER`
 
 **Properties:**
-- `id` (uuid)
-- `name` (string)
-- `email` (string, unique)
-- `role` (`OFFICER` | `MEMBER`)
+- `id`
+- `name`
+- `email`
+- `role`
 - `created_at`, `updated_at`
+
+**Password handling:**
+- The user-facing `User` DTO **does not** carry a password hash.
+- The `UserWithPassword` DTO (internal, used by the auth service only) adds
+  `PasswordHash string` and is **never** sent over the API.
+- Passwords are stored as bcrypt hashes in `users.password_hash` (see ADR-006).
 
 **Behavior:** none (read-only entity for this assignment)
 

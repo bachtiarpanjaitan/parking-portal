@@ -11,6 +11,7 @@ You are a senior software architect and senior fullstack engineer.
 - **pgx** (`github.com/jackc/pgx/v5`) — PostgreSQL driver + connection pool
 - **amqp091-go** (`github.com/rabbitmq/amqp091-go`) — RabbitMQ client
 - **golang-jwt** (`github.com/golang-jwt/jwt/v5`) — JWT generation & validation
+- **bcrypt** (`golang.org/x/crypto/bcrypt`) — password hashing (ADR-006)
 - **google/uuid** (`github.com/google/uuid`) — UUID v4
 - **shopspring/decimal** (`github.com/shopspring/decimal`) — money math
 - **go-playground/validator** (`github.com/go-playground/validator/v10`) — request validation

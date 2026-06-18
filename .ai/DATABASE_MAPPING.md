@@ -15,11 +15,12 @@
 | name | varchar(255) | not null |
 | email | varchar(255) | unique, not null |
 | role | varchar(20) | enum: `OFFICER`, `MEMBER` |
+| password_hash | varchar(255) | bcrypt hash; nullable for backward compat |
 | created_at | timestamp | not null, default `now()` |
 | updated_at | timestamp | not null |
 
-Auth note: this assignment uses **mocked authentication** (email only, no password).
-See ADR-006.
+Auth: **password-based with bcrypt** (see ADR-006). The hash is never sent
+to clients. The seeder sets `password123` for the 3 demo users.
 
 ---
 

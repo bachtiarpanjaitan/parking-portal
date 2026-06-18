@@ -1,0 +1,31 @@
+# =============================================================================
+# Base image for all 4 backend Go services.
+# Other Dockerfiles (Dockerfile.gateway, Dockerfile.violation, etc.) use this
+# as the build stage.
+# =============================================================================
+FROM golang:1.24-alpine AS build
+
+WORKDIR /src
+
+# Cache deps first
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy source
+COPY pkg/ ./pkg/
+# Service code is COPY'd in the per-service Dockerfile
+
+# Build flags
+ENV CGO_ENABLED=0 GOOS=linux GOFLAGS=-trimpath
+
+# =============================================================================
+# Runtime image - distroless for minimal attack surface
+# =============================================================================
+FROM gcr.io/distroless/static-debian12:nonroot
+
+WORKDIR /app
+COPY --from=build /src/pkg /app/pkg
+# The binary is COPY'd in the per-service Dockerfile
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/app/server"]

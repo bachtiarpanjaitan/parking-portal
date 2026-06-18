@@ -90,18 +90,21 @@ Example:
 
 HTTP:
 
-```text id="n9h37o"
+```text
 401 Unauthorized
 ```
 
-Example:
+Example (also covers wrong-password):
 
-```json id="pjlwm2"
+```json
 {
   "code": "UNAUTHORIZED",
-  "message": "Authentication required"
+  "message": "invalid email or password"
 }
 ```
+
+> All login failures (email not found, wrong password, missing hash) return
+> this single response to avoid leaking whether the email exists.
 
 ---
 

@@ -1,0 +1,29 @@
+# =============================================================================
+# Violation service (port 8081)
+# Owns: violations, invoices, rules, fine_rule_details, users (read),
+#       photo upload, history.
+# =============================================================================
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+COPY pkg/ ./pkg/
+COPY violation-service/ ./violation-service/
+ENV CGO_ENABLED=0 GOOS=linux GOFLAGS=-trimpath
+RUN go build -ldflags="-s -w" -o /out/server     ./violation-service/cmd/api && \
+    go build -ldflags="-s -w" -o /out/migrate   ./violation-service/cmd/migrate && \
+    go build -ldflags="-s -w" -o /out/seed      ./violation-service/cmd/seed
+
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=build /out/server   /app/server
+COPY --from=build /out/migrate  /app/migrate
+COPY --from=build /out/seed     /app/seed
+COPY --from=build /src/pkg                                  /app/pkg
+COPY --from=build /src/violation-service/migrations         /app/migrations
+# Storage directory for uploaded photos (mounted as a volume in compose)
+RUN mkdir -p /app/storage/violations && chown -R nonroot:nonroot /app
+EXPOSE 8081
+USER nonroot:nonroot
+# Default: run the API. Override with ["./migrate"] or ["./seed"] in compose.
+ENTRYPOINT ["/app/server"]

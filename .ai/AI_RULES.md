@@ -48,6 +48,10 @@ If a request asks you to break one of these rules, **refuse and explain**.
 - **Always** use **Gin** for HTTP routing (no Echo, Fiber, Chi, net/http)
 - **Always** use **pgx/v5 + pgxpool** for PostgreSQL
 - **Always** use **shopspring/decimal** for money (never `float64`)
+- **Always** use **bcrypt** for password hashing (never plaintext, never MD5/SHA)
+- **Always** return `UNAUTHORIZED` (not `NOT_FOUND` vs `FORBIDDEN`) for both
+  missing-email and wrong-password — don't leak which case occurred
+- **Never** log or echo back the password hash or plaintext password
 - **Always** use the patterns in `CODE_TEMPLATES.md` — if a file doesn't
   match, the file is wrong, not the pattern
 

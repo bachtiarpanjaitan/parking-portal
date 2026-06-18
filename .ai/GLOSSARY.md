@@ -106,8 +106,14 @@
 
 - **JWT** — JSON Web Token issued on login. Carries `sub` (user id) and
   `role`. Validated by the API Gateway on every request.
-- **Mock auth** — Login takes only an `email` (no password). If the email
-  matches a `users` row, the gateway returns a JWT. See ADR-006.
+- **bcrypt** — Password hashing algorithm used for `users.password_hash`
+  (golang.org/x/crypto/bcrypt, `DefaultCost`). See ADR-006.
+- **Password auth** — Login takes `email` + `password`. The service looks up
+  the user by email, compares the bcrypt hash, and returns a JWT on success.
+  All failure cases (email not found, wrong password, missing hash) return
+  the same `UNAUTHORIZED` message to avoid leaking which case occurred.
+- **Demo password** — `password123` — the default password for the 3 seeded
+  users. NEVER use in production. See `SEED_DATA.md`.
 
 ---
 

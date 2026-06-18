@@ -260,6 +260,34 @@ to `errs.CodeValidation` with `details` populated.
 
 ---
 
+# Auth pattern (bcrypt + JWT)
+
+```go
+// In auth/service.go
+func (s *Service) Login(email, password string) (LoginResponse, error) {
+    u, err := s.users.FindByEmailWithPassword(ctx, email)
+    if err != nil {
+        // collapse "not found" and "wrong password" to one UNAUTHORIZED
+        if ae, ok := errs.AsAppError(err); ok && ae.ErrCode == errs.CodeNotFound {
+            return LoginResponse{}, errs.New(errs.CodeUnauthorized, "invalid email or password")
+        }
+        return LoginResponse{}, err
+    }
+    if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
+        return LoginResponse{}, errs.New(errs.CodeUnauthorized, "invalid email or password")
+    }
+    tok, _ := s.signer.Sign(u.ID, auth.Role(u.Role))
+    return LoginResponse{Token: tok, User: u.User}, nil
+}
+```
+
+Rules:
+- **Never** include the password hash in any response.
+- **Always** use the same `UNAUTHORIZED` message for any login failure.
+- **Always** use `bcrypt.CompareHashAndPassword` (constant-time).
+
+---
+
 # Standardized error envelope
 
 The `pkg/errs` package defines:

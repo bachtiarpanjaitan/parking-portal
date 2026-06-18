@@ -72,11 +72,26 @@ This guarantees historical consistency.
 
 # ADR-006
 
-**Title:** Mock Authentication
+**Title:** Password-Based Authentication (bcrypt)
 
-**Status:** Accepted
+**Status:** Accepted (revised from "mock email-only" → "password + bcrypt")
 
-**Reason:** Authentication is not a core business requirement. The login endpoint accepts only an `email` of an existing user and returns a JWT. No password is stored or validated.
+**Reason:** Real password authentication is needed for the assignment to
+demonstrate a complete login flow. The login endpoint accepts `email` and
+`password`; the password is stored as a bcrypt hash (`golang.org/x/crypto/bcrypt`,
+`DefaultCost`). JWT is signed on success. All failure cases collapse to
+`UNAUTHORIZED` ("invalid email or password") to avoid leaking whether the
+email exists.
+
+**Password rules (basic):**
+- min 8 characters (recommended; current validator is `min=1` for the demo)
+- bcrypt hash stored in `users.password_hash` (VARCHAR(255))
+- comparison via `bcrypt.CompareHashAndPassword`
+- default seed password is `password123` (see `SEED_DATA.md`)
+- demo accounts:
+  - `officer@example.com` / `password123` (OFFICER)
+  - `member@example.com`  / `password123` (MEMBER)
+  - `member2@example.com` / `password123` (MEMBER)
 
 ---
 

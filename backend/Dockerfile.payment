@@ -1,0 +1,20 @@
+# =============================================================================
+# Payment service (port 8082)
+# Owns: payments. Mock provider in-process.
+# =============================================================================
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+COPY pkg/ ./pkg/
+COPY payment-service/ ./payment-service/
+ENV CGO_ENABLED=0 GOOS=linux GOFLAGS=-trimpath
+RUN go build -ldflags="-s -w" -o /out/server ./payment-service/cmd/api
+
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=build /out/server /app/server
+COPY --from=build /src/pkg /app/pkg
+EXPOSE 8082
+USER nonroot:nonroot
+ENTRYPOINT ["/app/server"]

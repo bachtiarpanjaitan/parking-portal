@@ -8,10 +8,12 @@
 # Authentication Module
 
 **Responsibilities:**
-- `POST /auth/login` — email-only mock login (ADR-006)
-- JWT generation
+- `POST /auth/login` — password + bcrypt login (ADR-006)
+- Look up user by email, compare bcrypt hash
+- JWT generation on success
 - `role` extraction from JWT
 - Gateway-side JWT validation middleware
+- **All failure cases collapse to `UNAUTHORIZED` "invalid email or password"**
 
 **Roles in the system:** `OFFICER`, `MEMBER`
 
