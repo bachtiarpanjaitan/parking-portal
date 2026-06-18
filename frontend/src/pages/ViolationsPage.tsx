@@ -35,7 +35,7 @@ export default function ViolationsPage() {
             <h1 className="text-2xl font-bold">Violations</h1>
             {user.role === 'OFFICER' && (
                 <CreateForm
-                    onSubmit={(b) => create.mutate(b)}
+                    onSubmit={(b: any) => create.mutate(b)}
                     loading={create.isPending}
                     error={create.error as any}
                 />

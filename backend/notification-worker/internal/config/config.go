@@ -39,11 +39,11 @@ func Load() (*Config, error) {
 		DBUser:     getenv("DB_USER", "postgres"),
 		DBPassword: getenv("DB_PASSWORD", "postgres"),
 
-		RabbitMQURL:      getenv("RABBITMQ_URL", ""),
+		RabbitMQURL:      getenv("RABBITMQ_URL", "amqp://localhost:5672/"),
 		RabbitMQExchange: getenv("RABBITMQ_EXCHANGE", "parking.events"),
 		RabbitMQQueue:    getenv("RABBITMQ_NOTIFICATION_QUEUE", "notification.queue"),
 	}
-
+	fmt.Println(cfg)
 	cfg.DBMaxConns = int32(getenvInt("DB_MAX_CONNS", 5))
 	cfg.WorkerConcurrency = getenvInt("WORKER_CONCURRENCY", 1)
 	cfg.WorkerRetryCount = getenvInt("WORKER_RETRY_COUNT", 3)

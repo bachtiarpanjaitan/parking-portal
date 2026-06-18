@@ -70,7 +70,32 @@ api.interceptors.response.use(
     },
 )
 
-// Helpers to extract the success-payload from our envelope.
-export function unwrap<T>(p: Promise<{ data: { success: boolean; data: T; meta?: unknown; error?: unknown } }>): Promise<T> {
-    return p.then((r) => r.data.data)
+// ---- Envelope helpers ----
+//
+// All backend responses follow this envelope (see backend/pkg/httpx):
+//
+//   { "success": true, "data": <payload>, "meta": <pagination?>, "error": ... }
+//
+// `unwrap<T>` extracts the `data` field. For paginated list endpoints
+// (where `data` is an array AND `meta` is present), it additionally
+// flattens `meta` into the result so callers can write:
+//     unwrap<{ items: Violation[]; total: number }>(api.get('/violations'))
+// and have both `.items` (the array) and `.total` (the count) work.
+//
+// For non-paginated calls (detail / create / login), `data` is an object
+// and is returned as-is.
+export function unwrap<T>(p: Promise<{
+    data: { success: boolean; data: any; meta?: { page: number; page_size: number; total: number }; error?: unknown }
+}>): Promise<T> {
+    return p.then((r) => {
+        const d = r.data.data
+        const m = r.data.meta
+        if (m && Array.isArray(d)) {
+            // Paginated: synthesize the { items, ...meta } shape the UI expects.
+            // The TS generic T is usually typed as { items: T[]; total: number; ... }
+            // so this matches that contract at runtime.
+            return { items: d, ...m } as unknown as T
+        }
+        return d as T
+    })
 }
