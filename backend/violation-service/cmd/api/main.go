@@ -24,8 +24,10 @@ import (
 	"github.com/parking-portal/backend/violation-service/internal/config"
 	"github.com/parking-portal/backend/violation-service/internal/database"
 	"github.com/parking-portal/backend/violation-service/internal/events"
+	"github.com/parking-portal/backend/violation-service/internal/history"
 	"github.com/parking-portal/backend/violation-service/internal/invoices"
 	"github.com/parking-portal/backend/violation-service/internal/rules"
+	"github.com/parking-portal/backend/violation-service/internal/uploads"
 	"github.com/parking-portal/backend/violation-service/internal/users"
 	"github.com/parking-portal/backend/violation-service/internal/violations"
 )
@@ -77,12 +79,15 @@ func main() {
 	rulesRepo := rules.NewPGRepository(db)
 	invoicesRepo := invoices.NewPGRepository(db)
 	violationsRepo := violations.NewPGRepository(db)
+	historyRepo := history.NewPGRepository(db)
 
 	// Services
 	authSvc := vsauth.NewService(usersRepo, signer)
 	rulesSvc := rules.NewService(rulesRepo)
 	invoicesSvc := invoices.NewService(invoicesRepo)
 	violationsSvc := violations.NewService(violationsRepo, rulesSvc, usersRepo, invoicesSvc, pub)
+	uploadsSvc := uploads.NewService(cfg.StoragePath, cfg.PublicUploadURL, cfg.MaxUploadSizeMB)
+	historySvc := history.NewService(historyRepo)
 
 	// Handlers
 	authH := vsauth.NewHandler(authSvc, zl)
@@ -90,6 +95,8 @@ func main() {
 	rulesH := rules.NewHandler(rulesSvc, zl)
 	invoicesH := invoices.NewHandler(invoicesSvc, zl)
 	violationsH := violations.NewHandler(violationsSvc, zl)
+	uploadsH := uploads.NewHandler(uploadsSvc, zl)
+	historyH := history.NewHandler(historySvc, zl)
 
 	// Gin engine + middlewares
 	gin.SetMode(gin.ReleaseMode)
@@ -99,7 +106,13 @@ func main() {
 		middleware.Recovery(zl),
 		middleware.CORS(),
 		middleware.Logger(zl),
+		// Global max multipart memory: covers the body limit enforced by uploads.
+		// The per-file size check in uploads.Service is the real guard.
 	)
+
+	// Serve uploaded photos as static files.
+	// Example: GET /uploads/violations/<uuid>.jpg → ./storage/violations/<uuid>.jpg
+	r.Static(cfg.PublicUploadURL, cfg.StoragePath)
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "violation-service"})
@@ -117,6 +130,8 @@ func main() {
 	rulesH.Register(v1)
 	invoicesH.Register(v1)
 	violationsH.Register(v1)
+	uploadsH.Register(v1)
+	historyH.Register(v1)
 
 	// HTTP server with graceful shutdown
 	srv := &http.Server{Addr: ":" + cfg.AppPort, Handler: r}
