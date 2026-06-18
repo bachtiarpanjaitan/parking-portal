@@ -1,0 +1,55 @@
+# =============================================================================
+# Parking Violation Portal - .gitignore
+# =============================================================================
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Node / Frontend ---
+node_modules/
+dist/
+build/
+.next/
+.vite/
+*.tsbuildinfo
+.npm/
+.eslintcache
+
+# --- Go / Backend ---
+backend/**/bin/
+backend/**/vendor/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+
+# --- Local data (not committed) ---
+storage/
+*.log
+logs/
+
+# --- Environment files ---
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# --- Docker ---
+.docker/
+
+# --- Temporary files ---
+tmp/
+temp/
+*.tmp

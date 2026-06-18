@@ -1,0 +1,199 @@
+# Docker Compose for Parking Violation Portal
+# See .ai/ENVVAR_CONFIG.md for the full env var contract.
+# See .ai/FOLDER_STRUCTURE.md for the Dockerfile paths (./backend/Dockerfile.gateway, etc.).
+# See .ai/ARCHITECTURE_DECISION.md ADR-009 (API Gateway routing) and ADR-010 (local FS storage).
+
+services:
+  # ---------- Infrastructure ----------
+  postgres:
+    image: postgres:17-alpine
+    container_name: parking-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-parking_portal}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-parking_portal}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - parking-net
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: parking-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Management UI
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - parking-net
+
+  # ---------- API Gateway ----------
+  # Single HTTP entrypoint at :8080, JWT validation + URL prefix routing.
+  # See ADR-009.
+  gateway:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.gateway
+    container_name: parking-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      violation-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_NAME: ${APP_NAME:-Parking Violation Portal}
+      APP_PORT: 8080
+      JWT_SECRET: ${JWT_SECRET:-super-secret-key-for-development-min-32-chars}
+      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+      # IMPORTANT: must use Docker service names, not localhost
+      VIOLATION_SERVICE_URL: http://violation-service:8081
+      PAYMENT_SERVICE_URL: http://payment-service:8082
+      PUBLIC_UPLOAD_URL: ${PUBLIC_UPLOAD_URL:-/uploads}
+    ports:
+      - "8080:8080"
+    networks:
+      - parking-net
+
+  # ---------- Violation Service ----------
+  # Owns: violations, invoices, rules, fine_rule_details, users (read).
+  # Also handles /uploads/* and serves static files.
+  violation-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.violation
+    container_name: parking-violation-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: 8081
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-parking_portal}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      JWT_SECRET: ${JWT_SECRET:-super-secret-key-for-development-min-32-chars}
+      JWT_EXPIRATION_HOURS: ${JWT_EXPIRATION_HOURS:-24}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-parking.events}
+      RABBITMQ_NOTIFICATION_QUEUE: ${RABBITMQ_NOTIFICATION_QUEUE:-notification.queue}
+      STORAGE_PATH: /app/storage
+      MAX_UPLOAD_SIZE_MB: ${MAX_UPLOAD_SIZE_MB:-5}
+      PUBLIC_UPLOAD_URL: ${PUBLIC_UPLOAD_URL:-/uploads}
+    volumes:
+      - violation_uploads:/app/storage      # persist uploaded photos (ADR-010)
+    ports:
+      - "8081:8081"
+    networks:
+      - parking-net
+
+  # ---------- Payment Service ----------
+  # Owns: payments. Calls internal mock provider (ADR-012). Updates invoice status.
+  payment-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.payment
+    container_name: parking-payment-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: 8082
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-parking_portal}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      JWT_SECRET: ${JWT_SECRET:-super-secret-key-for-development-min-32-chars}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-parking.events}
+    ports:
+      - "8082:8082"
+    networks:
+      - parking-net
+
+  # ---------- Notification Worker ----------
+  # Consumer-only, logs events, optional DB write (NOTIFICATIONS.md).
+  notification-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: parking-notification-worker
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-parking_portal}
+      DB_USER: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASS:-guest}@rabbitmq:5672/
+      RABBITMQ_EXCHANGE: ${RABBITMQ_EXCHANGE:-parking.events}
+      RABBITMQ_NOTIFICATION_QUEUE: ${RABBITMQ_NOTIFICATION_QUEUE:-notification.queue}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      WORKER_RETRY_COUNT: ${WORKER_RETRY_COUNT:-3}
+    networks:
+      - parking-net
+
+  # ---------- Frontend (Vite + React) ----------
+  # Built statically and served by nginx. VITE_API_URL points at the gateway
+  # as seen from the BROWSER, so it's localhost:8080.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8080/api/v1}
+    container_name: parking-frontend
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    ports:
+      - "3000:80"
+    networks:
+      - parking-net
+
+# ---------- Named Volumes ----------
+volumes:
+  postgres_data:
+    driver: local
+  violation_uploads:
+    driver: local
+
+# ---------- Network ----------
+networks:
+  parking-net:
+    driver: bridge
