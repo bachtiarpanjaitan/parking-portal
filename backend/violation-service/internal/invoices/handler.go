@@ -35,17 +35,42 @@ func (h *Handler) Register(g *gin.RouterGroup) {
 
 func (h *Handler) List(c *gin.Context) {
 	f := Filter{
-		Page:     atoiD(c.Query("page"), 1),
-		PageSize: atoiD(c.Query("page_size"), 20),
-		Status:   c.Query("status"),
+		Page:          atoiD(c.Query("page"), 1),
+		PageSize:      atoiD(c.Query("page_size"), 20),
+		Status:        c.Query("status"),
+		LicensePlate:  c.Query("license_plate"),
+		ViolationType: c.Query("violation_type"),
+		Location:      c.Query("location"),
 	}
+	if v := c.Query("from"); v != "" {
+		f.From = &v
+	}
+	if v := c.Query("to"); v != "" {
+		f.To = &v
+	}
+
 	role := middleware.Role(c)
-	if role == "MEMBER" {
+	switch role {
+	case "MEMBER":
+		// MEMBER is always scoped to their own invoices. A `member_id`
+		// query param sent by a member is ignored (we never trust the
+		// client to widen their own scope).
 		uid := middleware.UserID(c)
 		f.MemberID = &uid
-	} else if role != "OFFICER" {
+	case "OFFICER":
+		// OFFICER may pass `member_id` to drill into one member's
+		// invoices, or omit it to see everyone's.
+		if mid := c.Query("member_id"); mid != "" {
+			u, err := uuid.Parse(mid)
+			if err != nil {
+				panic(errs.New(errs.CodeValidation, "invalid member_id"))
+			}
+			f.MemberID = &u
+		}
+	default:
 		panic(errs.New(errs.CodeForbidden, "unknown role"))
 	}
+
 	items, total, err := h.svc.List(c.Request.Context(), f)
 	if err != nil {
 		panic(err)

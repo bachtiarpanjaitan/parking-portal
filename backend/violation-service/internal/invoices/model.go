@@ -35,3 +35,18 @@ type InvoiceWithLatest struct {
 	Invoice
 	LatestPayment *LatestPayment `json:"latest_payment,omitempty"`
 }
+
+// InvoiceListItem is the row shape returned by GET /invoices. It embeds
+// Invoice and flattens the joined violation fields the UI needs to render
+// the table (license plate, violation type, location, photo, etc.) so the
+// frontend does not have to N+1 a second request per row.
+type InvoiceListItem struct {
+	Invoice
+	// Violation snapshot — joined from the violations table.
+	LicensePlate        string    `json:"license_plate"`
+	ViolationType       string    `json:"violation_type"`
+	Location            string    `json:"location"`
+	ViolationTimestamp  time.Time `json:"violation_timestamp"`
+	PhotoURL            string    `json:"photo_url"`
+	RuleVersionNumber   int       `json:"rule_version_number"`
+}

@@ -13,16 +13,20 @@ import (
 	"github.com/parking-portal/backend/pkg/errs"
 )
 
-// Filter holds the list query options.
+// Filter holds the list query options. String filters are case-insensitive
+// partial matches (LicensePlate, Location) or exact matches (ViolationType).
+// Date range filters apply to violation_timestamp.
 type Filter struct {
-	MemberID     *uuid.UUID
-	LicensePlate string
-	From         *time.Time
-	To           *time.Time
-	Page         int
-	PageSize     int
-	Sort         string // "violation_timestamp" | "created_at" | "fine_amount"
-	Order        string // "asc" | "desc"
+	MemberID      *uuid.UUID
+	LicensePlate  string
+	ViolationType string
+	Location      string
+	From          *time.Time
+	To            *time.Time
+	Page          int
+	PageSize      int
+	Sort          string // "violation_timestamp" | "created_at" | "fine_amount"
+	Order         string // "asc" | "desc"
 }
 
 // Repository is the persistence interface.
@@ -116,8 +120,17 @@ func (r *pgRepo) List(ctx context.Context, f Filter) ([]Violation, int, error) {
 		where += " AND v.member_id = $" + itoa(len(args))
 	}
 	if f.LicensePlate != "" {
-		args = append(args, f.LicensePlate)
-		where += " AND v.license_plate = $" + itoa(len(args))
+		// ILIKE partial match so "B 123" finds "B 1234 ABC" too.
+		args = append(args, "%"+f.LicensePlate+"%")
+		where += " AND v.license_plate ILIKE $" + itoa(len(args))
+	}
+	if f.ViolationType != "" {
+		args = append(args, f.ViolationType)
+		where += " AND v.violation_type = $" + itoa(len(args))
+	}
+	if f.Location != "" {
+		args = append(args, "%"+f.Location+"%")
+		where += " AND v.location ILIKE $" + itoa(len(args))
 	}
 	if f.From != nil {
 		args = append(args, *f.From)

@@ -72,36 +72,19 @@ func (h *Handler) Get(c *gin.Context) {
 
 func (h *Handler) List(c *gin.Context) {
 	f := Filter{
-		LicensePlate: c.Query("license_plate"),
-		Page:         atoiDefault(c.Query("page"), 1),
-		PageSize:     atoiDefault(c.Query("page_size"), 20),
-		Sort:         c.DefaultQuery("sort", "violation_timestamp"),
-		Order:        c.DefaultQuery("order", "desc"),
-	}
-	if mid := c.Query("member_id"); mid != "" {
-		u, err := uuid.Parse(mid)
-		if err != nil {
-			panic(errs.New(errs.CodeValidation, "invalid member_id"))
-		}
-		f.MemberID = &u
-	}
-	if f := c.Query("from"); f != "" {
-		t, err := time.Parse(time.RFC3339, f)
-		if err != nil {
-			panic(errs.New(errs.CodeValidation, "invalid from"))
-		}
-		f = "" // shadow
-		_ = t
-	}
-	// MEMBER role: force member_id to self
-	role := middleware.Role(c)
-	if role == "MEMBER" {
-		uid := middleware.UserID(c)
-		f.MemberID = &uid
-	} else if role != "OFFICER" {
-		panic(errs.New(errs.CodeForbidden, "unknown role"))
+		LicensePlate:  c.Query("license_plate"),
+		ViolationType: c.Query("violation_type"),
+		Location:      c.Query("location"),
+		Page:          atoiDefault(c.Query("page"), 1),
+		PageSize:      atoiDefault(c.Query("page_size"), 20),
+		Sort:          c.DefaultQuery("sort", "violation_timestamp"),
+		Order:         c.DefaultQuery("order", "desc"),
 	}
 
+	// Date range: parse both params once. We tolerate malformed values
+	// silently (ignore them) so a typo in the UI doesn't 500 the page;
+	// the underlying repository will still return all rows when f.From
+	// and f.To stay nil.
 	if v := c.Query("from"); v != "" {
 		if t, err := time.Parse(time.RFC3339, v); err == nil {
 			f.From = &t
@@ -112,6 +95,26 @@ func (h *Handler) List(c *gin.Context) {
 			f.To = &t
 		}
 	}
+
+	// Role-based scoping: MEMBER → own only. OFFICER may pass member_id
+	// to drill into one member's violations, or omit it to see everyone's.
+	role := middleware.Role(c)
+	switch role {
+	case "MEMBER":
+		uid := middleware.UserID(c)
+		f.MemberID = &uid
+	case "OFFICER":
+		if mid := c.Query("member_id"); mid != "" {
+			u, err := uuid.Parse(mid)
+			if err != nil {
+				panic(errs.New(errs.CodeValidation, "invalid member_id"))
+			}
+			f.MemberID = &u
+		}
+	default:
+		panic(errs.New(errs.CodeForbidden, "unknown role"))
+	}
+
 	items, total, err := h.svc.List(c.Request.Context(), f)
 	if err != nil {
 		panic(err)

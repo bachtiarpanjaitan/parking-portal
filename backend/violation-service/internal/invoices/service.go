@@ -39,8 +39,9 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*InvoiceWithLatest, er
 	return s.repo.FindByIDWithLatest(ctx, id)
 }
 
-// List returns paginated invoices, optionally filtered.
-func (s *Service) List(ctx context.Context, f Filter) ([]Invoice, int, error) {
+// List returns paginated invoices (joined with the underlying violation
+// fields the UI needs to render its table), optionally filtered.
+func (s *Service) List(ctx context.Context, f Filter) ([]InvoiceListItem, int, error) {
 	return s.repo.List(ctx, f)
 }
 

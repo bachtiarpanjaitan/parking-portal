@@ -30,8 +30,13 @@ func (h *Handler) Register(g *gin.RouterGroup) {
 
 func (h *Handler) List(c *gin.Context) {
 	f := Filter{
-		Page:     atoiD(c.Query("page"), 1),
-		PageSize: atoiD(c.Query("page_size"), 20),
+		Page:          atoiD(c.Query("page"), 1),
+		PageSize:      atoiD(c.Query("page_size"), 20),
+		LicensePlate:  c.Query("license_plate"),
+		ViolationType: c.Query("violation_type"),
+		Location:      c.Query("location"),
+		InvoiceStatus: c.Query("invoice_status"),
+		PaymentStatus: c.Query("payment_status"),
 	}
 
 	// Role-based scoping: MEMBER → own only.

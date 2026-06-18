@@ -12,13 +12,20 @@ import (
 	"github.com/parking-portal/backend/pkg/errs"
 )
 
-// Filter holds the list query options.
+// Filter holds the list query options. String filters are case-insensitive
+// partial matches (ILIKE '%...%') on the joined violation / invoice /
+// payment columns. Date range filters apply to the violation timestamp.
 type Filter struct {
-	MemberID *uuid.UUID
-	From     *string // ISO 8601
-	To       *string
-	Page     int
-	PageSize int
+	MemberID      *uuid.UUID
+	LicensePlate  string
+	ViolationType string
+	Location      string
+	InvoiceStatus string
+	PaymentStatus string
+	From          *string // ISO 8601
+	To            *string
+	Page          int
+	PageSize      int
 }
 
 // Repository is the persistence interface for the history view.
@@ -53,15 +60,46 @@ const baseSelectFragment = `
 		) p ON true
 		WHERE 1=1`
 
-// buildWhere appends the dynamic WHERE clauses for member_id / from / to.
-// It returns the SQL fragment (starting with " AND ...") and the args slice
-// matching the order of $N placeholders.
+// buildWhere appends the dynamic WHERE clauses for the filter fields.
+// It returns the SQL fragment (starting with " AND ...") and the args
+// slice matching the order of $N placeholders. The same fragment is
+// reused for the list and count queries so they always agree on the
+// filter set.
+//
+// Note: PaymentStatus uses the LATERAL subquery's alias `p`; if the
+// underlying violation has no invoice (LEFT JOIN), the COALESCE in the
+// SELECT returns '' and we treat that as "no payment" — the same as
+// how the SELECT collapses a missing payment row. Filtering by
+// `payment_status` therefore uses `p.status`, which is also nullable.
 func buildWhere(f Filter) (string, []any) {
 	var sb strings.Builder
 	var args []any
 	if f.MemberID != nil {
 		args = append(args, *f.MemberID)
 		sb.WriteString(fmt.Sprintf(" AND v.member_id = $%d", len(args)))
+	}
+	if f.LicensePlate != "" {
+		args = append(args, "%"+f.LicensePlate+"%")
+		sb.WriteString(fmt.Sprintf(" AND v.license_plate ILIKE $%d", len(args)))
+	}
+	if f.ViolationType != "" {
+		args = append(args, f.ViolationType)
+		sb.WriteString(fmt.Sprintf(" AND v.violation_type = $%d", len(args)))
+	}
+	if f.Location != "" {
+		args = append(args, "%"+f.Location+"%")
+		sb.WriteString(fmt.Sprintf(" AND v.location ILIKE $%d", len(args)))
+	}
+	if f.InvoiceStatus != "" {
+		// Only violations that have an invoice (LEFT JOIN may produce
+		// NULL) and match the requested status. Pass `''` separately
+		// so we don't accidentally match the COALESCE default.
+		args = append(args, f.InvoiceStatus)
+		sb.WriteString(fmt.Sprintf(" AND i.status = $%d", len(args)))
+	}
+	if f.PaymentStatus != "" {
+		args = append(args, f.PaymentStatus)
+		sb.WriteString(fmt.Sprintf(" AND p.status = $%d", len(args)))
 	}
 	if f.From != nil {
 		args = append(args, *f.From)

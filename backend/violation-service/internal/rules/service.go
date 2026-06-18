@@ -33,9 +33,9 @@ type Service struct {
 
 func NewService(repo Repository) *Service { return &Service{repo: repo} }
 
-// List returns all rule versions, newest first.
-func (s *Service) List(ctx context.Context) ([]Version, error) {
-	return s.repo.ListVersions(ctx)
+// List returns paginated rule versions, optionally filtered.
+func (s *Service) List(ctx context.Context, f Filter) ([]Version, int, error) {
+	return s.repo.ListVersions(ctx, f)
 }
 
 // Get returns one version with its details.
@@ -77,6 +77,38 @@ func (s *Service) CreateDraft(ctx context.Context, createdBy uuid.UUID, req Crea
 		})
 	}
 	return s.repo.CreateVersion(ctx, v, details)
+}
+
+// UpdateDraft replaces the 4 details of a draft rule version. Refuses
+// to touch an active version — create a new draft instead.
+func (s *Service) UpdateDraft(ctx context.Context, id uuid.UUID, req CreateRequest) (*VersionWithDetails, error) {
+	if len(req.Rules) != 4 {
+		return nil, errs.New(errs.CodeValidation, "exactly 4 rule details required")
+	}
+	// Reuse CreateRequest shape: it's the same 4-rule payload, just
+	// bound to an existing version.
+	details := make([]Detail, 0, len(req.Rules))
+	for _, r := range req.Rules {
+		if err := validateOne(r); err != nil {
+			return nil, err
+		}
+		details = append(details, Detail{
+			RuleVersionID:   id,
+			ViolationType:   r.ViolationType,
+			BaseAmount:      r.BaseAmount,
+			DayMultiplier:   r.DayMultiplier,
+			NightMultiplier: r.NightMultiplier,
+			Repeat0:         r.Repeat0,
+			Repeat1:         r.Repeat1,
+			Repeat2Plus:     r.Repeat2Plus,
+		})
+	}
+	return s.repo.UpdateVersionDetails(ctx, id, details)
+}
+
+// Delete removes a draft rule version. Active versions are refused.
+func (s *Service) Delete(ctx context.Context, id uuid.UUID) error {
+	return s.repo.DeleteVersion(ctx, id)
 }
 
 // Publish atomically activates the version and deactivates all others.

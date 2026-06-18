@@ -12,13 +12,23 @@ import (
 	"github.com/parking-portal/backend/pkg/errs"
 )
 
+// Filter for listing rule versions.
+type Filter struct {
+	// IsActive nil = all, true = active only, false = drafts only.
+	IsActive *bool
+	Page     int
+	PageSize int
+}
+
 // Repository is the persistence interface.
 type Repository interface {
-	ListVersions(ctx context.Context) ([]Version, error)
+	ListVersions(ctx context.Context, f Filter) ([]Version, int, error)
 	GetVersion(ctx context.Context, id uuid.UUID) (*VersionWithDetails, error)
 	GetActiveVersion(ctx context.Context) (*VersionWithDetails, error)
 	NextVersionNumber(ctx context.Context) (int, error)
 	CreateVersion(ctx context.Context, v Version, details []Detail) (*VersionWithDetails, error)
+	UpdateVersionDetails(ctx context.Context, versionID uuid.UUID, details []Detail) (*VersionWithDetails, error)
+	DeleteVersion(ctx context.Context, id uuid.UUID) error
 	ActivateVersion(ctx context.Context, id uuid.UUID) error
 }
 
@@ -26,26 +36,150 @@ type pgRepo struct{ db *pgxpool.Pool }
 
 func NewPGRepository(db *pgxpool.Pool) Repository { return &pgRepo{db: db} }
 
-func (r *pgRepo) ListVersions(ctx context.Context) ([]Version, error) {
-	const q = `SELECT id, version_number, is_active, published_at,
+// ListVersions returns a paginated, optionally-filtered list of rule
+// versions (newest first by version_number) plus the total count.
+func (r *pgRepo) ListVersions(ctx context.Context, f Filter) ([]Version, int, error) {
+	if f.Page < 1 {
+		f.Page = 1
+	}
+	if f.PageSize <= 0 || f.PageSize > 100 {
+		f.PageSize = 20
+	}
+
+	args := []any{}
+	where := "WHERE 1=1"
+	if f.IsActive != nil {
+		args = append(args, *f.IsActive)
+		where += " AND is_active = $" + itoa(len(args))
+	}
+
+	listSQL := `SELECT id, version_number, is_active, published_at,
 		COALESCE(created_by, '00000000-0000-0000-0000-000000000000'::uuid),
 		created_at, updated_at
-		FROM fine_rule_versions ORDER BY version_number DESC`
-	rows, err := r.db.Query(ctx, q)
+		FROM fine_rule_versions ` + where + ` ORDER BY version_number DESC
+		LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
+	args = append(args, f.PageSize, (f.Page-1)*f.PageSize)
+
+	rows, err := r.db.Query(ctx, listSQL, args...)
 	if err != nil {
-		return nil, errs.Wrap(errs.CodeInternal, "list versions", err)
+		return nil, 0, errs.Wrap(errs.CodeInternal, "list versions", err)
 	}
 	defer rows.Close()
-	var out []Version
+	out := make([]Version, 0, f.PageSize)
 	for rows.Next() {
 		var v Version
 		if err := rows.Scan(&v.ID, &v.VersionNumber, &v.IsActive, &v.PublishedAt,
 			&v.CreatedBy, &v.CreatedAt, &v.UpdatedAt); err != nil {
-			return nil, errs.Wrap(errs.CodeInternal, "scan version", err)
+			return nil, 0, errs.Wrap(errs.CodeInternal, "scan version", err)
 		}
 		out = append(out, v)
 	}
-	return out, nil
+	if err := rows.Err(); err != nil {
+		return nil, 0, errs.Wrap(errs.CodeInternal, "iterate versions", err)
+	}
+
+	countSQL := "SELECT count(*) FROM fine_rule_versions " + where
+	var total int
+	if err := r.db.QueryRow(ctx, countSQL, args[:len(args)-2]...).Scan(&total); err != nil {
+		return nil, 0, errs.Wrap(errs.CodeInternal, "count versions", err)
+	}
+	return out, total, nil
+}
+
+// UpdateVersionDetails replaces the 4 details rows of a draft (non-active)
+// version. We delete + reinsert in one transaction so the unique
+// (rule_version_id, violation_type) constraint never trips and we can
+// return the new full record in a single round-trip.
+func (r *pgRepo) UpdateVersionDetails(ctx context.Context, versionID uuid.UUID, details []Detail) (*VersionWithDetails, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, errs.Wrap(errs.CodeInternal, "begin tx", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Refuse to mutate an active version: the violation engine reads
+	// from the active version and we don't want concurrent violations
+	// to see half-applied changes. Create a new draft instead.
+	var isActive bool
+	if err := tx.QueryRow(ctx,
+		`SELECT is_active FROM fine_rule_versions WHERE id = $1 FOR UPDATE`, versionID,
+	).Scan(&isActive); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errs.New(errs.CodeRuleNotFound, "rule version not found")
+		}
+		return nil, errs.Wrap(errs.CodeInternal, "lookup version", err)
+	}
+	if isActive {
+		return nil, errs.New(errs.CodeBusinessRule, "cannot update an active rule version; create a new draft instead")
+	}
+
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM fine_rule_details WHERE rule_version_id = $1`, versionID,
+	); err != nil {
+		return nil, errs.Wrap(errs.CodeInternal, "delete old details", err)
+	}
+
+	now := timeNow()
+	for _, d := range details {
+		if d.ID == uuid.Nil {
+			d.ID = uuid.New()
+		}
+		d.RuleVersionID = versionID
+		if err := validateDetailAmounts(d); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO fine_rule_details
+				(id, rule_version_id, violation_type, base_amount,
+				 day_multiplier, night_multiplier, repeat_0, repeat_1, repeat_2_plus,
+				 created_at, updated_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+			d.ID, d.RuleVersionID, d.ViolationType, d.BaseAmount,
+			d.DayMultiplier, d.NightMultiplier, d.Repeat0, d.Repeat1, d.Repeat2Plus,
+			now,
+		); err != nil {
+			return nil, errs.Wrap(errs.CodeInternal, "insert detail", err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE fine_rule_versions SET updated_at = $1 WHERE id = $2`, now, versionID,
+	); err != nil {
+		return nil, errs.Wrap(errs.CodeInternal, "bump version", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, errs.Wrap(errs.CodeInternal, "commit", err)
+	}
+	return r.GetVersion(ctx, versionID)
+}
+
+// DeleteVersion removes a rule version. Active versions cannot be deleted
+// because they are the source of truth for the violation engine — first
+// publish a different version, then delete the old one.
+func (r *pgRepo) DeleteVersion(ctx context.Context, id uuid.UUID) error {
+	var isActive bool
+	if err := r.db.QueryRow(ctx,
+		`SELECT is_active FROM fine_rule_versions WHERE id = $1`, id,
+	).Scan(&isActive); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errs.New(errs.CodeRuleNotFound, "rule version not found")
+		}
+		return errs.Wrap(errs.CodeInternal, "lookup version", err)
+	}
+	if isActive {
+		return errs.New(errs.CodeBusinessRule, "cannot delete an active rule version; publish a different version first")
+	}
+
+	// details cascade via FK ON DELETE CASCADE (see migration 0004).
+	tag, err := r.db.Exec(ctx, `DELETE FROM fine_rule_versions WHERE id = $1`, id)
+	if err != nil {
+		return errs.Wrap(errs.CodeInternal, "delete version", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return errs.New(errs.CodeRuleNotFound, "rule version not found")
+	}
+	return nil
 }
 
 func (r *pgRepo) GetVersion(ctx context.Context, id uuid.UUID) (*VersionWithDetails, error) {
@@ -213,4 +347,15 @@ func validateDetailAmounts(d Detail) error {
 		return errs.New(errs.CodeValidation, "base_amount must be > 0")
 	}
 	return nil
+}
+
+// itoa is a tiny int-to-string helper used to build $N placeholders
+// dynamically. Postgres only accepts up to 65535 params, which is far
+// more than the 4-5 we ever build here.
+func itoa(i int) string {
+	const digits = "0123456789"
+	if i < 10 {
+		return string(digits[i])
+	}
+	return itoa(i/10) + string(digits[i%10])
 }
