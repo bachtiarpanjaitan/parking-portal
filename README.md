@@ -135,11 +135,12 @@ For the Midtrans Snap UI in the browser, no extra setup — it loads from `app.s
 # Makefile Shortcuts
 
 > Every common workflow is a one-liner via the `Makefile` at the repo root.
-> Run `make help` to print the full list at any time.
+> Run `make help` to print the full list, or `make ports` to see the per-service ports.
 
 | Target                | What it does                                                                |
 | --------------------- | --------------------------------------------------------------------------- |
 | `make help`           | Print all targets with their descriptions.                                  |
+| `make ports`          | Print the configured per-service ports (8080/8081/8082).                    |
 | `make up`             | `docker compose up -d --build` — start **everything** (infra + 4 services + frontend). |
 | `make down`           | `docker compose down` — stop everything.                                    |
 | `make logs`           | Tail logs from all compose services.                                        |
@@ -153,24 +154,30 @@ For the Midtrans Snap UI in the browser, no extra setup — it loads from `app.s
 | `make fmt`            | `gofmt -w` across the backend.                                              |
 | `make tidy`           | `go mod tidy` in the backend.                                               |
 | `make clean`          | `docker compose down -v` + remove build artifacts.                          |
-| `make run-violation`  | Run the **violation service** locally via `go run` (loads `../.env`).       |
-| `make run-payment`    | Run the **payment service** locally via `go run` (loads `../.env`).         |
-| `make run-gateway`    | Run the **API gateway** locally via `go run` (loads `../.env`).             |
-| `make run-worker`     | Run the **notification worker** locally via `go run` (loads `../.env`).      |
+| `make run-violation`  | Run the **violation service** on `:8081` (loads `../.env`).                 |
+| `make run-payment`    | Run the **payment service** on `:8082` (loads `../.env`).                   |
+| `make run-gateway`    | Run the **API gateway** on `:8080` (loads `../.env`).                       |
+| `make run-worker`     | Run the **notification worker** locally (no HTTP port — RabbitMQ consumer). |
 
 ### Why `make run-*` Just Works
 
-The Go services auto-load the project-root `.env` file on startup via
-`backend/pkg/dotenv` (a tiny, dependency-free loader that walks up from
-the current working directory). That means:
-
-- No need to prefix every command with `JWT_SECRET=... DB_USER=...`.
-- No need to `cp .env backend/.env`.
+- **Ports are baked into the Makefile** itself (8080 / 8081 / 8082 / no-port), so the
+  `.env` doesn't need an `APP_PORT` line and there's no risk of two services
+  accidentally colliding on the same port. Run `make ports` any time to see the
+  current assignments.
+- The Go services **auto-load the project-root `.env`** on startup via
+  `backend/pkg/dotenv` (a tiny, dependency-free loader that walks up from
+  the current working directory). So no need to prefix every command with
+  `JWT_SECRET=... DB_USER=...` or to `cp .env backend/.env`.
 - Existing shell env vars always win over the file (so Docker / CI keep working).
 
-If you ever need to override a single value, just inline it as usual:
+If you ever need to override a single value, just inline it on the command line:
 
 ```bash
+# Override just the port for one run
+make run-violation VIOLATION_PORT=9081
+
+# Or override a database setting
 DB_USER=myuser make run-violation
 ```
 
@@ -245,7 +252,7 @@ make seed
 ### Step 2 — Start the 4 backend services (separate terminals)
 
 The Go services auto-load `../.env` (see [Makefile Shortcuts](#makefile-shortcuts)),
-so these are now one-liners:
+so these are one-liners — no env-var prefixing, no port juggling:
 
 ```bash
 # Terminal A — Violation Service (port 8081)
@@ -263,8 +270,11 @@ make run-worker
 
 Wait for the 3 HTTP services to log "listening" before continuing.
 
-> **Need to override a single value?** Inline it on the command line:
-> `DB_USER=myuser APP_PORT=9090 make run-violation`
+> **Need to override a port for one run?** Use the `*_PORT` make variables:
+> `make run-violation VIOLATION_PORT=9081`
+>
+> **Need to override a database setting?** Inline it as usual:
+> `DB_USER=myuser make run-violation`
 
 ### Step 3 — Start the frontend
 
@@ -408,7 +418,7 @@ parking_violation_portal/
 ├── storage/                      # Photo uploads (mounted volume)
 ├── docs/                         # DESIGN.md assets (ERD, data flow)
 ├── docker-compose.yml
-├── Makefile                      # Convenience targets (make up, make run-*, ...)
+├── Makefile                      # Convenience targets (make up, make run-*, make ports, ...)
 ├── .env.example                  # copy to .env
 ├── DESIGN.md
 ├── README.md                     # this file
@@ -500,7 +510,7 @@ set the key to `MOCK_anything` and the client returns a fake token (see
 - ✅ `DESIGN.md` — data flow + ERD (draw.io, attached as images in `docs/`)
 - ✅ Working source code (Go + React + TypeScript)
 - ✅ Docker Compose configuration
-- ✅ Makefile convenience targets (`make help` to list)
+- ✅ Makefile convenience targets (`make help` to list, `make ports` for the port map)
 - ✅ `.ai/` design documentation (17 files, self-consistent)
 - ✅ Seed data + migrations
 - ✅ Unit tests for fine engine, rule versioning, and dotenv loader

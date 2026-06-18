@@ -8,17 +8,27 @@
 #   make logs            - tail logs
 #   make migrate         - run SQL migrations
 #   make seed            - seed demo data
-#   make test            - run all Go tests
-#   make run-violation   - run violation service locally (loads ../.env)
-#   make run-payment     - run payment service locally
-#   make run-gateway     - run API gateway locally
-#   make run-worker      - run notification worker locally
+#   make test            - run all Go unit tests
+#   make run-violation   - run violation service on :$(VIOLATION_PORT)
+#   make run-payment     - run payment service on :$(PAYMENT_PORT)
+#   make run-gateway     - run API gateway on :$(GATEWAY_PORT)
+#   make run-worker      - run notification worker (no HTTP port)
+#   make ports           - print the configured per-service ports
+#
+# Override any port from the command line, e.g.:
+#   make run-violation VIOLATION_PORT=9081
 # =============================================================================
 
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: help up down logs ps build rebuild migrate seed fresh test fmt tidy clean \
+# ---- Per-service ports (single source of truth; override from CLI if needed) ----
+GATEWAY_PORT     ?= 8080
+VIOLATION_PORT   ?= 8081
+PAYMENT_PORT     ?= 8082
+# WORKER has no HTTP port — it's a RabbitMQ consumer.
+
+.PHONY: help up down logs ps build rebuild migrate seed fresh test fmt tidy clean ports \
         run-violation run-payment run-gateway run-worker
 
 help: ## Show this help
@@ -72,15 +82,23 @@ clean: ## Remove build artifacts and containers
 	$(COMPOSE) down -v --remove-orphans
 	rm -rf backend/**/bin/ backend/**/vendor/ storage/
 
-# ---- Local go run (loads ../.env automatically via backend/pkg/dotenv) ----
-run-violation: ## Run the violation service locally
-	cd backend && go run ./violation-service/cmd/api
+# ---- Local go run ----
+# Loads ../.env automatically via backend/pkg/dotenv. Port is set inline below so
+# the Makefile is the single source of truth (no APP_PORT juggling in .env).
+ports: ## Print the configured per-service ports
+	@echo "  gateway     :$(GATEWAY_PORT)"
+	@echo "  violation   :$(VIOLATION_PORT)"
+	@echo "  payment     :$(PAYMENT_PORT)"
+	@echo "  worker      (no HTTP port — RabbitMQ consumer)"
 
-run-payment: ## Run the payment service locally
-	cd backend && go run ./payment-service/cmd/api
+run-violation: ## Run the violation service on :$(VIOLATION_PORT)
+	cd backend && APP_PORT=$(VIOLATION_PORT) go run ./violation-service/cmd/api
 
-run-gateway: ## Run the API gateway locally
-	cd backend && go run ./gateway/cmd/gateway
+run-payment: ## Run the payment service on :$(PAYMENT_PORT)
+	cd backend && APP_PORT=$(PAYMENT_PORT) go run ./payment-service/cmd/api
 
-run-worker: ## Run the notification worker locally
+run-gateway: ## Run the API gateway on :$(GATEWAY_PORT)
+	cd backend && APP_PORT=$(GATEWAY_PORT) go run ./gateway/cmd/gateway
+
+run-worker: ## Run the notification worker (no HTTP port)
 	cd backend && go run ./notification-worker/cmd/worker
